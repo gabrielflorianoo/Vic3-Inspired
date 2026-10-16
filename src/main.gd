@@ -146,6 +146,13 @@ func _apply_dev_args() -> void:
 			get_tree().quit(0))
 
 
+func _exit_tree() -> void:
+	# Break state <-> module reference cycles so a discarded game is freed.
+	for st in [state, _preview]:
+		if st != null and st.has_method("dispose"):
+			st.dispose()
+
+
 func _perf_info() -> String:
 	var s := "provinces %d - countries %d - LOD %d" % [world.province_count - 1, world.country_count, overlay.lod]
 	if state != null:

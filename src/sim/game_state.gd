@@ -46,6 +46,7 @@ var _event_taken := 0
 var profile := false                 ## when true, per-module tick time is accumulated in prof_us / prof_n
 var prof_us: Dictionary = {}
 var prof_n: Dictionary = {}
+var prof_max: Dictionary = {}
 
 var _day_calls: Array = []           ## [[name, Callable], ...]
 var _week_calls: Array = []
@@ -226,6 +227,7 @@ func advance_day() -> void:
 		if _dom_of_doy[doy] == 1:
 			_run_profiled(_month_calls, "month")
 			month_index += 1
+		pops.sanitize()
 		return
 	for e: Array in _day_calls:
 		(e[1] as Callable).call()
@@ -236,15 +238,19 @@ func advance_day() -> void:
 		for e: Array in _month_calls:
 			(e[1] as Callable).call()
 		month_index += 1
+	pops.sanitize()
 
 
 func _run_profiled(calls: Array, tag: String) -> void:
 	for e: Array in calls:
 		var t0 := Time.get_ticks_usec()
 		(e[1] as Callable).call()
+		var dt := Time.get_ticks_usec() - t0
 		var k := "%s.%s" % [e[0], tag]
-		prof_us[k] = prof_us.get(k, 0) + (Time.get_ticks_usec() - t0)
+		prof_us[k] = prof_us.get(k, 0) + dt
 		prof_n[k] = prof_n.get(k, 0) + 1
+		if dt > prof_max.get(k, 0):
+			prof_max[k] = dt
 
 
 # --------------------------------------------------------------------------- events

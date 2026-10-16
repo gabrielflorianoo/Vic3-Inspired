@@ -39,7 +39,7 @@ const OCCUPIED_OUTPUT := 0.15
 const ADMIN_POP := 70000.0
 const DEBT_RATE := 0.08
 const LEVEL_COST_STEP := 0.03
-const ARMS_PC := {"great": 0.0006, "major": 0.0004, "minor": 0.00022}
+const ARMS_PC := {"great": 0.00012, "major": 0.00008, "minor": 0.00005}
 const COVERAGE := {"great": 1.0, "major": 0.9, "minor": 0.78}
 const DEP_COAL := [0.0, 0.25, 0.30, 0.80, 1.00, 0.15, 0.15, 0.30]
 const DEP_IRON := [0.0, 0.20, 0.25, 0.90, 1.00, 0.10, 0.10, 0.30]
@@ -70,6 +70,8 @@ var n_good := PackedInt32Array()
 var n_qty := PackedFloat64Array()
 var n_weight := PackedFloat64Array()
 var n_mult := PackedFloat64Array()      # NN * PC
+var n_group := PackedInt32Array()
+var grp_b := PackedInt32Array()         # start index of each need group, plus NN at the end
 var floor_w := PackedFloat64Array()     # PC
 var sub_w := PackedFloat64Array()       # PC
 
@@ -95,6 +97,7 @@ var b_deposit := PackedInt32Array()     # 0 none, 1 coal, 2 iron
 var b_tprod: Array = []                 # per b: PackedFloat64Array(8)
 var b_maxlvl := PackedInt32Array()
 var b_primary := PackedByteArray()
+var b_mineff := PackedFloat64Array()    ## output floor when inputs are short (tools make primary work faster, they do not gate it)
 var i_farm := 0
 var i_railway := 0
 var i_admin := 0
@@ -179,6 +182,7 @@ var _tariff_rev := PackedFloat64Array()
 var _act := PackedInt32Array()
 var _con_money := PackedFloat64Array()
 var _con_ok := PackedByteArray()
+var _tmp_want := PackedFloat64Array()
 
 const PERSIST_F64 := ["mp", "ms", "md", "fill", "sold", "src_flow", "snk_flow", "ref_price", "ref_supply",
 	"ref_demand", "ref_src", "ref_snk", "new_price", "new_supply", "new_demand", "new_src", "new_snk", "extra_demand",
@@ -225,13 +229,18 @@ func _load_defs() -> void:
 	g_arms = good_index("arms")
 	var needs: Array = gj.get("needs", [])
 	NN = needs.size()
-	n_good.resize(NN); n_qty.resize(NN); n_weight.resize(NN); n_mult.resize(NN * PC)
+	n_good.resize(NN); n_qty.resize(NN); n_weight.resize(NN); n_mult.resize(NN * PC); n_group.resize(NN)
+	grp_b.clear()
 	for j in NN:
 		n_good[j] = good_index(needs[j]["good"])
 		n_qty[j] = float(needs[j]["qty"])
 		n_weight[j] = float(needs[j]["weight"])
+		n_group[j] = int(needs[j].get("group", j))
+		if j == 0 or n_group[j] != n_group[j - 1]:
+			grp_b.append(j)
 		for k in PC:
 			n_mult[j * PC + k] = float(needs[j]["mult"][k])
+	grp_b.append(NN)
 	floor_w.resize(PC); sub_w.resize(PC)
 	floor_w.fill(0.0); sub_w.fill(0.0)
 	var wf: Dictionary = gj.get("wage_floor", {})
@@ -247,7 +256,7 @@ func _load_defs() -> void:
 	b_work.resize(B * PC); b_work.fill(0.0)
 	b_work_total.resize(B)
 	b_out_g.resize(B); b_out_q.resize(B); b_mod.resize(B); b_state.resize(B); b_owner.resize(B)
-	b_coastal.resize(B); b_tech.resize(B); b_deposit.resize(B); b_maxlvl.resize(B); b_primary.resize(B)
+	b_coastal.resize(B); b_tech.resize(B); b_deposit.resize(B); b_maxlvl.resize(B); b_primary.resize(B); b_mineff.resize(B)
 	b_in_g.clear(); b_in_q.clear(); b_bg_g.clear(); b_bg_q.clear(); b_terrain.clear(); b_tprod.clear()
 	for b in B:
 		var d: Dictionary = bl[b]
@@ -300,6 +309,7 @@ func _load_defs() -> void:
 		b_tprod.append(tpr)
 		b_maxlvl[b] = int(d["max_level"]) if d.get("max_level", null) != null else -1
 		b_primary[b] = 1 if d["category"] == "primary" else 0
+		b_mineff[b] = float(d.get("min_efficiency", 0.0))
 	i_farm = building_index("farm")
 	i_railway = building_index("railway")
 	i_admin = building_index("government_admin")
@@ -369,6 +379,7 @@ func _alloc() -> void:
 	_inc.resize(P * PC)
 	_emp.resize(P * PC)
 	_cwant.resize(P * PC * NN)
+	_tmp_want.resize(NN)
 	_act.resize(B)
 	for i in cg:
 		mp[i] = good_base[i % G]
@@ -435,9 +446,9 @@ func _est_income_pc(prof: int) -> float:
 	if prof < P_ARISTOCRAT:
 		return EMPLOY_TARGET * floor_w[prof] + (1.0 - EMPLOY_TARGET) * sub_w[prof]
 	if prof == P_ARISTOCRAT:
-		return sub_w[prof] + 4.0
+		return sub_w[prof] + 2.0
 	if prof == P_CAPITALIST:
-		return sub_w[prof] + 5.0
+		return sub_w[prof] + 8.0
 	return floor_w[prof]
 
 
@@ -488,20 +499,9 @@ func _seed_country(c: int) -> void:
 			var N: float = pops.size[p * PC + prof]
 			if N <= 0.0:
 				continue
-			var budget := N * _est_income_pc(prof) * (1.0 - TAX_BASE) * SPEND_SHARE
+			_ration(c, prof, N, N * _est_income_pc(prof) * (1.0 - TAX_BASE) * SPEND_SHARE, true, _tmp_want, 0)
 			for j in NN:
-				var g := n_good[j]
-				var full := N * n_qty[j] * n_mult[j * PC + prof] * need_scale[c * NN + j]
-				if full <= 0.0:
-					continue
-				var cost := full * good_base[g]
-				var want := full
-				if budget >= cost:
-					budget -= cost
-				else:
-					want = budget / good_base[g]
-					budget = 0.0
-				F[g] += want
+				F[n_good[j]] += _tmp_want[j]
 	F[g_arms] += pop_c * float(ARMS_PC.get(rank, 0.0003))
 	for g in G:
 		if good_cat[g] == "consumer" or good_cat[g] == "military" or good_cat[g] == "service":
@@ -515,7 +515,7 @@ func _seed_country(c: int) -> void:
 				continue
 			var go := b_out_g[b]
 			if go >= 0 and Q[go] > 0.0:
-				var lv: float = Q[go] / b_out_q[b]
+				var lv: float = Q[go] / b_out_q[b] * (1.3 if b_primary[b] == 1 else 1.0)
 				var ig: PackedInt32Array = b_in_g[b]
 				var iq: PackedFloat64Array = b_in_q[b]
 				for j in ig.size():
@@ -571,8 +571,8 @@ func _seed_country(c: int) -> void:
 		var need_c: float = used[P_CLERK][k] / EMPLOY_TARGET
 		var old_l: float = pops.size[base + P_LABORER]
 		var old_c: float = pops.size[base + P_CLERK]
-		var new_l := maxf(need_l, 0.03 * pop)
-		var new_c := maxf(need_c, 0.012 * pop)
+		var new_l := maxf(need_l, 0.015 * pop)
+		var new_c := maxf(need_c, 0.008 * pop)
 		var new_m := need_m
 		var peas: float = pops.size[base + P_PEASANT] + (old_l - new_l) + (old_c - new_c) - new_m
 		if peas < 0.12 * pop:
@@ -592,6 +592,30 @@ func _seed_country(c: int) -> void:
 	pea_pool.resize(np)
 	for k in np:
 		pea_pool[k] = pops.size[provs[k] * PC + P_PEASANT] * EMPLOY_TARGET
+	# Land pressure: if the peasantry is larger than the harvest needs, each worker produces less
+	# (instead of leaving a quarter of the country jobless); if labour is short, a little more.
+	var fish_q := minf(Q[good_index("fish")], coast_pea * 0.22 / b_work[i_fishing * PC] * b_out_q[i_fishing] * EMPLOY_TARGET)
+	var peas_jobs: Array = [[i_farm, Q[g_grain]], [i_ranch, Q[good_index("fibers")]], [i_fishing, fish_q]]
+	var labor_avail := 0.0
+	for k in np:
+		labor_avail += pea_pool[k]
+	var labor_need := 0.0
+	for e: Array in peas_jobs:
+		var jb: int = e[0]
+		var tw := 0.0
+		var pw := 0.0
+		for k in np:
+			var pq := provs[k]
+			if b_coastal[jb] == 1 and world.p_port[pq].x < 0.0:
+				continue
+			tw += pea_pool[k] * tp[pq * B + jb]
+			pw += pea_pool[k]
+		if pw > 0.0 and tw > 0.0 and e[1] > 0.0:
+			labor_need += e[1] / (b_out_q[jb] * (tw / pw)) * b_work[jb * PC + P_PEASANT]
+	var r_p := clampf(labor_need / maxf(labor_avail, 1.0), 0.45, 1.3)
+	for k in np:
+		for e: Array in peas_jobs:
+			tp[provs[k] * B + int(e[0])] *= r_p
 	if Q[good_index("fish")] > 0.0:
 		_place_peasant(c, provs, i_fishing, minf(Q[good_index("fish")], coast_pea * 0.22 / b_work[i_fishing * PC] * b_out_q[i_fishing] * EMPLOY_TARGET), pea_pool, 0.25)
 	if Q[good_index("fibers")] > 0.0:
@@ -652,7 +676,7 @@ func _room(k: int, b: int, used: Array, pool_cap: Array, pop: float) -> float:
 
 func _place_output(c: int, provs: PackedInt32Array, pop_k: PackedFloat64Array, b: int, q_req: float, used: Array, pool_cap: Array) -> void:
 	var np := provs.size()
-	var eff_out := b_out_q[b] * EMPLOY_TARGET
+	var eff_out := b_out_q[b]
 	var w := PackedFloat64Array()
 	w.resize(np)
 	var capk := PackedFloat64Array()
@@ -677,6 +701,19 @@ func _place_output(c: int, provs: PackedInt32Array, pop_k: PackedFloat64Array, b
 					weight = 0.0
 		w[k] = weight
 		capk[k] = cp
+	if b_deposit[b] > 0:
+		# make sure a country can mine as much as its own industry needs (a rich vein in its best province)
+		var tot_cap := 0.0
+		var best_k := 0
+		for k in np:
+			tot_cap += capk[k]
+			if w[k] > w[best_k]:
+				best_k = k
+		var need_lv := q_req / maxf(eff_out, 1.0)
+		if tot_cap < need_lv:
+			var extra := int(ceil(need_lv - tot_cap))
+			cap[provs[best_k] * B + b] += extra
+			capk[best_k] += extra
 	if secondary:
 		# concentrate industry in the strongest provinces
 		var est_lv := q_req / eff_out
@@ -771,7 +808,7 @@ func _commit(provs: PackedInt32Array, b: int, alloc: PackedFloat64Array, capk: P
 func _place_peasant(c: int, provs: PackedInt32Array, b: int, q_req: float, pool: PackedFloat64Array, max_share: float) -> void:
 	var np := provs.size()
 	var wk := b_work[b * PC + P_PEASANT]
-	var eff_out := b_out_q[b] * EMPLOY_TARGET
+	var eff_out := b_out_q[b]
 	var w := PackedFloat64Array()
 	w.resize(np)
 	var capk := PackedFloat64Array()
@@ -830,6 +867,7 @@ func _finish_seed() -> void:
 ## Run the economy for some weeks before the game starts, so prices, fills, wages and standard
 ## of living are at their natural values when the player takes control.
 func warm_up(weeks: int) -> void:
+	_retarget_arms()
 	for i in weeks:
 		pops.tick_week()
 		tick_week()
@@ -840,6 +878,30 @@ func warm_up(weeks: int) -> void:
 	_snapshot_refs()
 	week = 0
 	s.events.clear()
+
+
+## The military module exists only after the economy is seeded; size the arms industry to what
+## it actually asks for (never to nothing: a spare level keeps equipment flowing).
+func _retarget_arms() -> void:
+	var ab := building_index("arms_factory")
+	for c in C:
+		var provs: PackedInt32Array = world.c_provinces[c]
+		var cur := 0
+		for p in provs:
+			cur += lvl[p * B + ab]
+		if cur == 0:
+			continue
+		var want: float = s.arms_demand(c) * 1.2
+		var target := maxi(1, int(ceil(want / (b_out_q[ab] * 0.93))))
+		if target >= cur:
+			continue
+		var excess := cur - target
+		for p in provs:
+			if excess <= 0:
+				break
+			var take := mini(excess, lvl[p * B + ab])
+			lvl[p * B + ab] -= take
+			excess -= take
 
 
 # =========================================================================== weekly tick
@@ -974,13 +1036,14 @@ func _phase_production(alive: PackedByteArray) -> void:
 				var mk := b_mod[b]
 				if mk >= 0:
 					mf = _m_out[c * 3 + mk]
-				out = L * b_out_q[b] * st * io * mf * rb * tp[base + b] * occ
+				var ioe := b_mineff[b] + (1.0 - b_mineff[b]) * io
+				out = L * b_out_q[b] * st * ioe * mf * rb * tp[base + b] * occ
 				ms[cg + go] += out
 				src_flow[(cg + go) * T + b] += out
 			bout[base + b] = out
 			short_lvl[cb + b] += L * st
 			if io < 0.999 and st > 0.0:
-				short_lost[cb + b] += L * st * (1.0 - io)
+				short_lost[cb + b] += L * st * (1.0 - io) * (1.0 - b_mineff[b])
 				short_good[cb + b] = lim
 			if b == i_admin:
 				admin_staff[c] += emp[base + b]
@@ -1004,25 +1067,36 @@ func _phase_household_demand(alive: PackedByteArray) -> void:
 			var N := psize[i]
 			if N <= 0.0:
 				continue
-			var budget := pinc[i] * net
+			_ration(c, prof, N, pinc[i] * net, false, _cwant, i * NN)
 			var cw := i * NN
 			for j in NN:
-				var g := n_good[j]
-				var full := N * n_qty[j] * n_mult[j * PC + prof] * need_scale[c * NN + j]
-				if full <= 0.0:
-					_cwant[cw + j] = 0.0
-					continue
-				var pr := mp[cg + g]
-				var cost := full * pr
-				var want := full
-				if budget >= cost:
-					budget -= cost
-				else:
-					want = budget / pr
-					budget = 0.0
-				_cwant[cw + j] = want
-				md[cg + g] += want
-				snk_flow[(cg + g) * T + TAG_POPS] += want
+				var want := _cwant[cw + j]
+				if want > 0.0:
+					var g := n_good[j]
+					md[cg + g] += want
+					snk_flow[(cg + g) * T + TAG_POPS] += want
+
+
+## Household shopping: spend `budget` on the needs basket, group by group; needs inside a group
+## (grain+fish) are rationed together. Writes wanted quantities to out[off + j].
+func _ration(c: int, prof: int, N: float, budget: float, base_prices: bool, out: PackedFloat64Array, off: int) -> void:
+	var cg := c * G
+	for gi in grp_b.size() - 1:
+		var j0 := grp_b[gi]
+		var j1 := grp_b[gi + 1]
+		var cost := 0.0
+		for j in range(j0, j1):
+			var full := N * n_qty[j] * n_mult[j * PC + prof] * need_scale[c * NN + j]
+			out[off + j] = full
+			cost += full * (good_base[n_good[j]] if base_prices else mp[cg + n_good[j]])
+		if cost <= 0.0:
+			continue
+		var sc := 1.0
+		if budget < cost:
+			sc = budget / cost
+			for j in range(j0, j1):
+				out[off + j] *= sc
+		budget = maxf(budget - cost * sc, 0.0)
 
 
 func _con_slots(c: int) -> int:
@@ -1343,6 +1417,8 @@ func _organic_growth(alive: PackedByteArray) -> void:
 		var u: float = sz - pops.employed[i]
 		if u > 0.07 * sz and u > wk:
 			var b := i_farm
+			if sold[c * G + g_grain] < 0.92:
+				continue   # the granaries are already full
 			if tp[p * B + b] >= 0.3 and lvl[p * B + b] < cap[p * B + b]:
 				lvl[p * B + b] += 1
 			elif tp[p * B + i_ranch] >= 0.3 and lvl[p * B + i_ranch] < cap[p * B + i_ranch]:
@@ -1630,6 +1706,10 @@ func queue(c: int) -> Array:
 
 
 func treasury(c: int) -> float:
+	return tre[c]
+
+
+func treasury_of(c: int) -> float:
 	return tre[c]
 
 

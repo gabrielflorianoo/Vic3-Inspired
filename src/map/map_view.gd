@@ -17,6 +17,7 @@ var controller_fn := Callable()
 var _lookup_img: Image
 var _lookup_tex: ImageTexture
 var _mat: ShaderMaterial
+var _any_occupied := false
 
 
 func setup(w: RefCounted) -> void:
@@ -38,8 +39,10 @@ func setup(w: RefCounted) -> void:
 
 
 func refresh_all() -> void:
+	_any_occupied = false
 	for id in world.province_count:
 		_write(id)
+	_mat.set_shader_parameter("has_occupation", _any_occupied)
 	_lookup_tex.update(_lookup_img)
 	_mat.set_shader_parameter("country_selected", selected_country >= 0)
 	_mat.set_shader_parameter("map_mode", mode)
@@ -61,6 +64,7 @@ func _write(id: int) -> void:
 		if ctl >= 0 and ctl != o:
 			occ = world.c_color[ctl]
 			occ.a = 1.0
+			_any_occupied = true
 	_lookup_img.set_pixel(id, 2, occ)
 
 

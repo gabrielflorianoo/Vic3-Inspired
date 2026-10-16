@@ -1,8 +1,8 @@
 {
-  "_note": "base_price in money units per unit of good. 'needs' is the household basket: qty per person per week, 'mult' by profession (peasant, laborer, machinist, clerk, aristocrat, capitalist, soldier), 'weight' = share of standard-of-living (sum 1.0). Needs are bought in the listed order until income runs out.",
+  "_note": "base_price in money units per unit of good. 'needs' is the household basket: qty per person per week, 'mult' by profession (peasant, laborer, machinist, clerk, aristocrat, capitalist, soldier), 'weight' = share of standard-of-living (sum 1.0). Needs are bought group by group (in order) until income runs out; needs sharing a group are rationed together.",
   "goods": [
-    {"id": "grain",     "name": "Grain",     "base_price": 4.0,  "category": "food"},
-    {"id": "fish",      "name": "Fish",      "base_price": 5.0,  "category": "food"},
+    {"id": "grain",     "name": "Grain",     "base_price": 3.5,  "category": "food"},
+    {"id": "fish",      "name": "Fish",      "base_price": 4.5,  "category": "food"},
     {"id": "wood",      "name": "Timber",    "base_price": 5.0,  "category": "raw"},
     {"id": "coal",      "name": "Coal",      "base_price": 6.0,  "category": "raw"},
     {"id": "iron",      "name": "Iron Ore",  "base_price": 8.0,  "category": "raw"},
@@ -17,13 +17,13 @@
     {"id": "services",  "name": "Services",  "base_price": 8.0,  "category": "service"}
   ],
   "needs": [
-    {"good": "grain",     "qty": 0.140, "weight": 0.32, "mult": [1.0, 1.0, 1.0, 1.0, 1.1, 1.1, 1.1]},
-    {"good": "fish",      "qty": 0.035, "weight": 0.13, "mult": [1.0, 1.0, 1.0, 1.0, 1.1, 1.1, 1.1]},
-    {"good": "clothes",   "qty": 0.012, "weight": 0.17, "mult": [0.7, 0.9, 1.1, 1.4, 2.5, 2.5, 1.0]},
-    {"good": "furniture", "qty": 0.006, "weight": 0.13, "mult": [0.6, 0.8, 1.1, 1.5, 3.0, 3.0, 0.8]},
-    {"good": "services",  "qty": 0.010, "weight": 0.15, "mult": [0.5, 0.7, 1.0, 2.0, 3.0, 3.0, 0.7]},
-    {"good": "luxuries",  "qty": 0.004, "weight": 0.10, "mult": [0.05, 0.15, 0.4, 1.0, 5.0, 5.0, 0.2]}
+    {"good": "grain",     "qty": 0.140, "weight": 0.32, "group": 0, "mult": [1.0, 1.0, 1.0, 1.0, 1.1, 1.1, 1.1]},
+    {"good": "fish",      "qty": 0.035, "weight": 0.13, "group": 0, "mult": [1.0, 1.0, 1.0, 1.0, 1.1, 1.1, 1.1]},
+    {"good": "clothes",   "qty": 0.012, "weight": 0.17, "group": 1, "mult": [0.7, 0.9, 1.1, 1.4, 2.5, 2.5, 1.0]},
+    {"good": "furniture", "qty": 0.006, "weight": 0.13, "group": 2, "mult": [0.6, 0.8, 1.1, 1.5, 3.0, 3.0, 0.8]},
+    {"good": "services",  "qty": 0.010, "weight": 0.15, "group": 3, "mult": [0.5, 0.7, 1.0, 2.0, 3.0, 3.0, 0.7]},
+    {"good": "luxuries",  "qty": 0.004, "weight": 0.10, "group": 4, "mult": [0.05, 0.15, 0.4, 1.0, 5.0, 5.0, 0.2]}
   ],
   "wage_floor": {"peasant": 0.90, "laborer": 1.05, "machinist": 1.50, "clerk": 1.80, "soldier": 1.00},
-  "subsistence": {"peasant": 0.40, "laborer": 0.25, "machinist": 0.25, "clerk": 0.25}
+  "subsistence": {"peasant": 0.40, "laborer": 0.25, "machinist": 0.25, "clerk": 0.25, "aristocrat": 3.0, "capitalist": 3.0}
 }

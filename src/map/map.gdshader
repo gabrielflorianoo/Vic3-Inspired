@@ -13,6 +13,7 @@ uniform vec2 map_size = vec2(2048.0, 1024.0);
 uniform float zoom = 1.0;
 uniform int map_mode = 0; // 0 political, 1 terrain, 2 provinces
 uniform bool country_selected = false;
+uniform bool has_occupation = false; // true only while some province is occupied (skips the extra fetch otherwise)
 uniform float detail = 1.0; // 0 disables ocean animation / vignette (low quality)
 
 int pid(vec2 uv) {
@@ -82,6 +83,14 @@ void fragment() {
 			col = meta.a > 0.5 ? col * 1.08 : mix(col, vec3(luma * 0.9), 0.35) * 0.85;
 		}
 		if (meta.b > 0.5) col = col * 1.12 + 0.04;
+		if (has_occupation && map_mode != 1) {
+			vec4 occ = lk(id, 2);
+			if (occ.a > 0.5) {
+				// Occupied: diagonal stripes in the occupier's colour (screen-space, constant width).
+				float stripe = step(0.5, fract((FRAGCOORD.x + FRAGCOORD.y) / 9.0));
+				col = mix(col, occ.rgb * (0.55 + 0.9 * luma), stripe * 0.85);
+			}
+		}
 
 		// Country borders: dark outer line + tinted inner band.
 		float me = meta.r;

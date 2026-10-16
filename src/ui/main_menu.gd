@@ -3,7 +3,7 @@ extends Control
 ## single-quad map shader the game uses), title, and the primary buttons.
 ##
 ## Command line: `-- --benchmark` and `-- --autostart=<id>` skip straight into
-## the game scene; `-- --shot=path` screenshots the menu (docs/CI);
+## the game scene (`--newgame` goes to nation pick); `-- --shot=path` screenshots the menu (docs/CI);
 ## `-- --open=settings|load` opens that dialog first.
 
 const K := preload("res://src/ui/ui_kit.gd")
@@ -25,6 +25,9 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	if "--benchmark" in args:
 		K.session().start_benchmark()
+		return
+	if "--newgame" in args:
+		K.session().start_new()
 		return
 	for a: String in args:
 		if a.begins_with("--autostart="):

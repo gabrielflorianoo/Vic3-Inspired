@@ -21,7 +21,7 @@ func rebuild() -> void:
 	var econ = state.econ
 	var pop: float = pops.country_pop(c)
 	_kv(g, "Population", K.num(pop))
-	_kv(g, "GDP", K.money(econ.gdp(c)), "Gross domestic product per week")
+	_kv(g, "GDP", K.money(econ.gdp(c)), "Gross domestic product (annual value added)")
 	_kv(g, "Provinces", str(world.c_provinces[c].size()))
 	_kv(g, "Legitimacy", "%d" % int(state.politics.legitimacy(c)), "Government legitimacy 0-100. Falls with debt, unrest and war exhaustion.")
 	_kv(g, "Unemployment", K.pct(pops.unemployment(c), 1))

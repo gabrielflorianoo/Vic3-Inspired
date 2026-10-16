@@ -18,9 +18,9 @@ const PROF_NAMES := ["Peasants", "Laborers", "Machinists", "Clerks", "Aristocrat
 
 const TOTAL_POP := 62.0e6
 const TIER_FACTOR := [0.0, 0.7, 1.0, 1.4, 2.0, 3.2]
-const SOL_NEUTRAL := 7.0            ## standard of living at which births = deaths
-const GROWTH_PER_SOL := 0.003       ## annual growth per point of sol above neutral
-const START_SOL := [8.8, 10.2, 12.5, 14.5, 18.0, 18.0, 10.5]
+const SOL_NEUTRAL := 7.5            ## standard of living at which births = deaths
+const GROWTH_PER_SOL := 0.0018       ## annual growth per point of sol above neutral
+const START_SOL := [11.5, 14.0, 17.0, 18.0, 18.0, 18.0, 13.0]
 const PROF_LITERACY := [0.55, 1.0, 1.6, 2.6, 2.4, 2.6, 1.1]  ## relative to the province's base literacy
 
 var s
@@ -102,6 +102,20 @@ func tick_week() -> void:
 			employed[i] = sz
 
 
+## Cheap consistency pass GameState runs after every day (military/politics may have changed sizes).
+func sanitize() -> void:
+	var m := size.size()
+	for i in m:
+		var sz := size[i]
+		if sz < 0.0:
+			size[i] = 0.0
+			sz = 0.0
+		if i % PROF_COUNT >= ARISTOCRAT:
+			employed[i] = sz
+		elif employed[i] > sz:
+			employed[i] = sz
+
+
 func tick_month() -> void:
 	var econ = s.econ
 	var vac: PackedFloat64Array = econ.vacant
@@ -133,7 +147,7 @@ func tick_month() -> void:
 				var unemp := 0.0
 				if prof < ARISTOCRAT:
 					unemp = maxf(0.0, 1.0 - employed[i] / sz)
-				var t := clampf((9.5 - sl) / 9.5, -0.5, 1.0) * 0.45
+				var t := 0.10 + clampf((10.0 - sl) / 10.0, -0.5, 1.0) * 0.30
 				t += unemp * 0.5 + mino * 0.22
 				t += clampf(sol_prev[i] - sl, 0.0, 3.0) * 0.05
 				t = maxf(t, 0.0) * rad_mult

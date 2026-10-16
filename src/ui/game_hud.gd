@@ -66,6 +66,7 @@ var _tooltip: PanelContainer
 var _tip_label: Label
 var _status: Label
 var _dirty := false
+var _last_other_toast := -100000
 var _last_refresh := 0.0
 var _hist: Array = []     # per good: PackedFloat32Array of recent prices
 var _tabs_row: HBoxContainer
@@ -296,7 +297,7 @@ func update_bar(full: bool) -> void:
 	_bar_pop.text = "Pop " + K.num(state.pops.country_pop(c))
 	_bar_pop.tooltip_text = "Total population"
 	_bar_gdp.text = "GDP " + K.money(econ.gdp(c))
-	_bar_gdp.tooltip_text = "Gross domestic product per week"
+	_bar_gdp.tooltip_text = "Gross domestic product (annual value added)"
 	var leg: float = state.politics.legitimacy(c)
 	_bar_leg.text = "Legit %d" % int(leg)
 	_bar_leg.add_theme_color_override("font_color", K.GOOD if leg >= 50.0 else (K.WARN if leg >= 25.0 else K.BAD))
@@ -345,8 +346,9 @@ func _on_events(evs: Array) -> void:
 			if shown < 4:
 				toast(str(e.get("text", "")), kind)
 			shown += 1
-		elif kind == "war" and others < 1:
+		elif kind == "war" and others < 1 and Time.get_ticks_msec() - _last_other_toast > 5000:
 			toast("[%s] %s" % [world.c_short[ec], str(e.get("text", ""))], kind)
+			_last_other_toast = Time.get_ticks_msec()
 			others += 1
 	if shown > 4:
 		toast("+%d more events (see Events tab)" % (shown - 4), "system")

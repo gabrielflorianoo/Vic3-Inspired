@@ -5,6 +5,8 @@ extends RefCounted
 
 
 static func enc_f64(a: PackedFloat64Array) -> String:
+	if a.is_empty():
+		return ""
 	return Marshalls.raw_to_base64(a.to_byte_array())
 
 
@@ -15,6 +17,8 @@ static func dec_f64(s: Variant) -> PackedFloat64Array:
 
 
 static func enc_i32(a: PackedInt32Array) -> String:
+	if a.is_empty():
+		return ""
 	return Marshalls.raw_to_base64(a.to_byte_array())
 
 
@@ -25,6 +29,8 @@ static func dec_i32(s: Variant) -> PackedInt32Array:
 
 
 static func enc_u8(a: PackedByteArray) -> String:
+	if a.is_empty():
+		return ""
 	return Marshalls.raw_to_base64(a)
 
 

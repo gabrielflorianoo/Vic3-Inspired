@@ -90,7 +90,7 @@ func show_country(c: int) -> void:
 	if preview != null:
 		var army: Dictionary = preview.military.army(c)
 		rows.append(["Population", K.num(preview.pops.country_pop(c))])
-		rows.append(["GDP", K.money(preview.econ.gdp(c)) + " / wk"])
+		rows.append(["GDP", K.money(preview.econ.gdp(c)) + "  / yr"])
 		rows.append(["Army", "%d battalions  (power %.0f)" % [int(army.get("battalions", 0)), float(army.get("power", 0.0))]])
 		rows.append(["Literacy", K.pct(preview.pops.literacy_of(c), 0)])
 	var nb: PackedInt32Array = world.country_neighbors(c)

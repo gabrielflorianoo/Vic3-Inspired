@@ -41,12 +41,26 @@ func rebuild() -> void:
 
 	add_child(K.section("Wars"))
 	war_rows(self)
-	var occ: Array = mil.occupied_by(c)
-	if not occ.is_empty():
-		var names: PackedStringArray = []
-		for p in occ:
-			names.append(world.p_name[int(p)])
-		var l := K.lbl("Provinces held by foreign forces: " + ", ".join(names), 12, K.BAD)
-		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		l.custom_minimum_size = Vector2(480, 0)
-		add_child(l)
+	var held: Array = mil.occupied_by(c)
+	if not held.is_empty():
+		add_child(_wrapped("Provinces you occupy: " + _names(held), K.GOOD))
+	var lost: Array = []
+	for p in world.c_provinces[c]:
+		if mil.controller(p) != c:
+			lost.append(p)
+	if not lost.is_empty():
+		add_child(_wrapped("Provinces occupied by the enemy: " + _names(lost), K.BAD))
+
+
+func _names(arr: Array) -> String:
+	var names: PackedStringArray = []
+	for p in arr:
+		names.append(world.p_name[int(p)])
+	return ", ".join(names)
+
+
+func _wrapped(t: String, col: Color) -> Label:
+	var l := K.lbl(t, 12, col)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size = Vector2(480, 0)
+	return l
