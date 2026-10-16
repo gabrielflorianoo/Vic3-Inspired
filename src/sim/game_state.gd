@@ -324,6 +324,7 @@ func transfer_province(p: int, to: int) -> void:
 			lst.remove_at(idx)
 			world.c_provinces[from] = lst
 	if to >= 0:
+		alive[to] = 1
 		var lt: PackedInt32Array = world.c_provinces[to]
 		lt.append(p)
 		lt.sort()

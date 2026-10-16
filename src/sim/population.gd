@@ -222,7 +222,7 @@ func _promote(p: int, vac: PackedFloat64Array) -> void:
 		_move(ip, b + LABORER, amt)
 		vac[b + LABORER] -= amt
 	# unemployed skilled workers drift back to the land
-	for prof in [LABORER, MACHINIST, CLERK]:
+	for prof in [LABORER, MACHINIST]:
 		var i: int = b + prof
 		var u := size[i] - employed[i]
 		if u > 0.0:
@@ -338,13 +338,18 @@ func sol_explanation(c: int) -> String:
 			worst = j
 	if worst >= 0 and worst_gap > 0.01:
 		var g: int = econ.need_good(worst)
-		txt += ", held back mainly by %s: only %d%% of household demand is met" % [econ.good_name(g).to_lower(), int(round(econ.need_fill_of(c, worst) * 100.0))]
+		var name: String = econ.good_name(g).to_lower()
+		var base: float = econ.good_base_price(g)
+		var pr: float = econ.price(c, g) / base
 		var sup: float = econ.supply(c, g)
 		var dem: float = econ.demand(c, g)
-		if dem > 0.0 and sup < dem * 0.97:
-			txt += " because supply covers just %d%% of demand (price %.0f%% of base)" % [int(round(sup / dem * 100.0)), 100.0 * econ.price(c, g) / econ.good_base_price(g)]
+		txt += ". The weakest link is %s: households reach %d%% of a full basket" % [name, int(round(econ.need_fill_of(c, worst) * 100.0))]
+		if dem > 0.0 and sup < dem * 0.95:
+			txt += " because supply covers just %d%% of demand (price %d%% of base)" % [int(round(sup / dem * 100.0)), int(round(pr * 100.0))]
+		elif pr > 1.15:
+			txt += " because the high price (%d%% of base) eats into wages" % int(round(pr * 100.0))
 		else:
-			txt += " because wages leave little to spend once food is bought"
+			txt += " because wages leave little to spend after food and clothing"
 	else:
 		txt += ", as households can afford their full baskets"
 	var un := unemployment(c)

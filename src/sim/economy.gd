@@ -28,7 +28,7 @@ const MAX_WAGE_K := 2.5
 const PRICE_SMOOTH := 0.30
 const PRICE_EXP := 0.7
 const TRADE_CAP := 0.20             ## max share of an exporter's output moved to one partner per week
-const TAX_BASE := 0.08
+const TAX_BASE := 0.07
 const SPEND_SHARE := 0.97
 const BUILD_WEEKS := 8.0
 const QUEUE_MAX := 12
@@ -36,10 +36,10 @@ const SOL_SMOOTH := 0.12
 const REF_PERIOD := 4
 const EMPLOY_TARGET := 0.93
 const OCCUPIED_OUTPUT := 0.15
-const ADMIN_POP := 70000.0
+const ADMIN_POP := 45000.0
 const DEBT_RATE := 0.08
 const LEVEL_COST_STEP := 0.03
-const ARMS_PC := {"great": 0.00012, "major": 0.00008, "minor": 0.00005}
+const ARMS_PC := {"great": 0.00003, "major": 0.00002, "minor": 0.00001}   ## floor so a spare arms level always exists
 const COVERAGE := {"great": 1.0, "major": 0.9, "minor": 0.78}
 const DEP_COAL := [0.0, 0.25, 0.30, 0.80, 1.00, 0.15, 0.15, 0.30]
 const DEP_IRON := [0.0, 0.20, 0.25, 0.90, 1.00, 0.10, 0.10, 0.30]
@@ -50,6 +50,7 @@ var world
 var pops
 
 var week := 0
+var _seeded := false                ## buildings are seeded in warm_up(), once every module (tech, military...) exists
 var C := 0
 var G := 0
 var B := 0
@@ -174,15 +175,19 @@ var _m_tax := PackedFloat64Array()
 var _m_tariff := PackedFloat64Array()
 var _m_trade := PackedFloat64Array()
 var _ctl := PackedInt32Array()
+var _own := PackedInt32Array()          # world.p_owner (same array, cached for the hot loops)
 var _inc := PackedFloat64Array()
 var _emp := PackedFloat64Array()
-var _cwant := PackedFloat64Array()
 var _partners: Array = []
 var _tariff_rev := PackedFloat64Array()
 var _act := PackedInt32Array()
 var _con_money := PackedFloat64Array()
 var _con_ok := PackedByteArray()
 var _tmp_want := PackedFloat64Array()
+var qpc := PackedFloat64Array()         # (c*PC+prof)*NN + j  per-capita wants (derived from need_scale)
+var _gcost := PackedFloat64Array()
+var _gsc := PackedFloat64Array()        # per cohort and need group: share of the basket bought
+var _hh_want := PackedFloat64Array()
 
 const PERSIST_F64 := ["mp", "ms", "md", "fill", "sold", "src_flow", "snk_flow", "ref_price", "ref_supply",
 	"ref_demand", "ref_src", "ref_snk", "new_price", "new_supply", "new_demand", "new_src", "new_snk", "extra_demand",
@@ -200,10 +205,7 @@ func setup(state) -> void:
 	C = world.country_count
 	_load_defs()
 	_alloc()
-	_seed_terrain()
-	for c in C:
-		_seed_country(c)
-	_finish_seed()
+	_seeded = false
 
 
 func _read_json(path: String) -> Dictionary:
@@ -378,7 +380,9 @@ func _alloc() -> void:
 	_ctl.resize(P); _ctl.fill(-1)
 	_inc.resize(P * PC)
 	_emp.resize(P * PC)
-	_cwant.resize(P * PC * NN)
+	_gsc.resize(P * PC * maxi(grp_b.size() - 1, 1))
+	_gcost.resize(C * PC * maxi(grp_b.size() - 1, 1))
+	_hh_want.resize(C * NN)
 	_tmp_want.resize(NN)
 	_act.resize(B)
 	for i in cg:
@@ -411,8 +415,9 @@ func _seed_terrain() -> void:
 		for k in mini(mix.size(), Biome.COUNT):
 			rc += mix[k] * DEP_COAL[k]
 			ri += mix[k] * DEP_IRON[k]
-		dep[p * 2] = rc * (0.35 + 0.65 * s.rng.randf())
-		dep[p * 2 + 1] = ri * (0.35 + 0.65 * s.rng.randf())
+		# every land province has at least a thin seam, so no country can lose all its coal or iron
+		dep[p * 2] = maxf(rc * (0.35 + 0.65 * s.rng.randf()), 0.15)
+		dep[p * 2 + 1] = maxf(ri * (0.35 + 0.65 * s.rng.randf()), 0.15)
 	# every country gets at least one decent coal and iron deposit
 	for c in C:
 		for kind in 2:
@@ -480,7 +485,7 @@ func _seed_country(c: int) -> void:
 	var s_f := 1.0
 	if j_fish >= 0 and j_grain >= 0:
 		var fish_dem := pop_c * n_qty[j_fish]
-		var fish_cap := coast_pea * 0.22 / maxf(b_work[i_fishing * PC + P_PEASANT], 1.0) * b_out_q[i_fishing] * EMPLOY_TARGET
+		var fish_cap := coast_pea * 0.22 / maxf(b_work[i_fishing * PC + P_PEASANT], 1.0) * b_out_q[i_fishing] * _mf(c, i_fishing) * EMPLOY_TARGET
 		s_f = clampf(fish_cap / maxf(fish_dem, 1.0), 0.0, 1.0)
 		need_scale[c * NN + j_fish] = s_f
 		need_scale[c * NN + j_grain] = 1.0 + (1.0 - s_f) * n_qty[j_fish] / n_qty[j_grain]
@@ -502,7 +507,8 @@ func _seed_country(c: int) -> void:
 			_ration(c, prof, N, N * _est_income_pc(prof) * (1.0 - TAX_BASE) * SPEND_SHARE, true, _tmp_want, 0)
 			for j in NN:
 				F[n_good[j]] += _tmp_want[j]
-	F[g_arms] += pop_c * float(ARMS_PC.get(rank, 0.0003))
+	var arms_d: float = s.arms_demand(c)
+	F[g_arms] += maxf(arms_d * 1.2, pop_c * float(ARMS_PC.get(rank, 0.0003)))
 	for g in G:
 		if good_cat[g] == "consumer" or good_cat[g] == "military" or good_cat[g] == "service":
 			F[g] *= cov
@@ -515,7 +521,7 @@ func _seed_country(c: int) -> void:
 				continue
 			var go := b_out_g[b]
 			if go >= 0 and Q[go] > 0.0:
-				var lv: float = Q[go] / b_out_q[b] * (1.3 if b_primary[b] == 1 else 1.0)
+				var lv: float = Q[go] / (b_out_q[b] * _mf(c, b)) * (1.3 if b_primary[b] == 1 else 1.0)
 				var ig: PackedInt32Array = b_in_g[b]
 				var iq: PackedFloat64Array = b_in_q[b]
 				for j in ig.size():
@@ -572,7 +578,7 @@ func _seed_country(c: int) -> void:
 		var old_l: float = pops.size[base + P_LABORER]
 		var old_c: float = pops.size[base + P_CLERK]
 		var new_l := maxf(need_l, 0.015 * pop)
-		var new_c := maxf(need_c, 0.008 * pop)
+		var new_c := maxf(need_c, 0.02 * pop)   # educated clerks stay clerks (and do the research) even without a desk
 		var new_m := need_m
 		var peas: float = pops.size[base + P_PEASANT] + (old_l - new_l) + (old_c - new_c) - new_m
 		if peas < 0.12 * pop:
@@ -594,7 +600,7 @@ func _seed_country(c: int) -> void:
 		pea_pool[k] = pops.size[provs[k] * PC + P_PEASANT] * EMPLOY_TARGET
 	# Land pressure: if the peasantry is larger than the harvest needs, each worker produces less
 	# (instead of leaving a quarter of the country jobless); if labour is short, a little more.
-	var fish_q := minf(Q[good_index("fish")], coast_pea * 0.22 / b_work[i_fishing * PC] * b_out_q[i_fishing] * EMPLOY_TARGET)
+	var fish_q := minf(Q[good_index("fish")], coast_pea * 0.22 / b_work[i_fishing * PC] * b_out_q[i_fishing] * _mf(c, i_fishing) * EMPLOY_TARGET)
 	var peas_jobs: Array = [[i_farm, Q[g_grain]], [i_ranch, Q[good_index("fibers")]], [i_fishing, fish_q]]
 	var labor_avail := 0.0
 	for k in np:
@@ -611,13 +617,13 @@ func _seed_country(c: int) -> void:
 			tw += pea_pool[k] * tp[pq * B + jb]
 			pw += pea_pool[k]
 		if pw > 0.0 and tw > 0.0 and e[1] > 0.0:
-			labor_need += e[1] / (b_out_q[jb] * (tw / pw)) * b_work[jb * PC + P_PEASANT]
+			labor_need += e[1] / (b_out_q[jb] * _mf(c, jb) * (tw / pw)) * b_work[jb * PC + P_PEASANT]
 	var r_p := clampf(labor_need / maxf(labor_avail, 1.0), 0.45, 1.3)
 	for k in np:
 		for e: Array in peas_jobs:
 			tp[provs[k] * B + int(e[0])] *= r_p
 	if Q[good_index("fish")] > 0.0:
-		_place_peasant(c, provs, i_fishing, minf(Q[good_index("fish")], coast_pea * 0.22 / b_work[i_fishing * PC] * b_out_q[i_fishing] * EMPLOY_TARGET), pea_pool, 0.25)
+		_place_peasant(c, provs, i_fishing, fish_q, pea_pool, 0.25)
 	if Q[good_index("fibers")] > 0.0:
 		_place_peasant(c, provs, i_ranch, Q[good_index("fibers")], pea_pool, 1.0)
 	_place_peasant(c, provs, i_farm, Q[g_grain], pea_pool, 1.0)
@@ -650,6 +656,12 @@ func _seed_country(c: int) -> void:
 			wpw[p2 * B + b] = _floor_avg(b)
 
 
+## Tech/law output multiplier of building type b in country c (as used by production).
+func _mf(c: int, b: int) -> float:
+	var mk := b_mod[b]
+	return _m_out[c * 3 + mk] if mk >= 0 else 1.0
+
+
 func _floor_avg(b: int) -> float:
 	var t := 0.0
 	var w := 0.0
@@ -676,7 +688,7 @@ func _room(k: int, b: int, used: Array, pool_cap: Array, pop: float) -> float:
 
 func _place_output(c: int, provs: PackedInt32Array, pop_k: PackedFloat64Array, b: int, q_req: float, used: Array, pool_cap: Array) -> void:
 	var np := provs.size()
-	var eff_out := b_out_q[b]
+	var eff_out := b_out_q[b] * _mf(c, b)
 	var w := PackedFloat64Array()
 	w.resize(np)
 	var capk := PackedFloat64Array()
@@ -714,10 +726,12 @@ func _place_output(c: int, provs: PackedInt32Array, pop_k: PackedFloat64Array, b
 			var extra := int(ceil(need_lv - tot_cap))
 			cap[provs[best_k] * B + b] += extra
 			capk[best_k] += extra
-	if secondary:
-		# concentrate industry in the strongest provinces
+	if secondary or b_deposit[b] > 0:
+		# concentrate industry and mining in the strongest provinces
 		var est_lv := q_req / eff_out
-		var keep := maxi(1, int(ceil(est_lv / (12.0 if b == i_merchant else 8.0))))
+		var keep := maxi(1, int(ceil(est_lv / (12.0 if b == i_merchant else (2.0 if b_deposit[b] > 0 else 8.0)))))
+		if b_deposit[b] > 0:
+			keep = maxi(keep, mini(3, np))   # never a single point of failure
 		var idx: Array = range(np)
 		idx.sort_custom(func(a, bb): return w[a] > w[bb] or (w[a] == w[bb] and a < bb))
 		for r in np:
@@ -788,6 +802,14 @@ func _place_levels(c: int, provs: PackedInt32Array, pop_k: PackedFloat64Array, b
 
 ## Round fractional allocations to integer levels with error diffusion and record worker use.
 func _commit(provs: PackedInt32Array, b: int, alloc: PackedFloat64Array, capk: PackedFloat64Array, used: Array) -> void:
+	var tot := 0.0
+	var best := 0
+	for k in provs.size():
+		tot += alloc[k]
+		if alloc[k] > alloc[best]:
+			best = k
+	if tot > 0.12 and tot < 0.5 and capk[best] >= 0.5:
+		alloc[best] = 1.0   # a real need is never rounded down to nothing
 	var acc := 0.0
 	var placed := 0
 	for k in provs.size():
@@ -808,7 +830,7 @@ func _commit(provs: PackedInt32Array, b: int, alloc: PackedFloat64Array, capk: P
 func _place_peasant(c: int, provs: PackedInt32Array, b: int, q_req: float, pool: PackedFloat64Array, max_share: float) -> void:
 	var np := provs.size()
 	var wk := b_work[b * PC + P_PEASANT]
-	var eff_out := b_out_q[b]
+	var eff_out := b_out_q[b] * _mf(c, b)
 	var w := PackedFloat64Array()
 	w.resize(np)
 	var capk := PackedFloat64Array()
@@ -867,7 +889,14 @@ func _finish_seed() -> void:
 ## Run the economy for some weeks before the game starts, so prices, fills, wages and standard
 ## of living are at their natural values when the player takes control.
 func warm_up(weeks: int) -> void:
-	_retarget_arms()
+	if not _seeded:
+		_refresh_country_mods(s.alive)
+		_seed_terrain()
+		for c in C:
+			_seed_country(c)
+		_finish_seed()
+		_seeded = true
+	_build_qpc()
 	for i in weeks:
 		pops.tick_week()
 		tick_week()
@@ -880,34 +909,11 @@ func warm_up(weeks: int) -> void:
 	s.events.clear()
 
 
-## The military module exists only after the economy is seeded; size the arms industry to what
-## it actually asks for (never to nothing: a spare level keeps equipment flowing).
-func _retarget_arms() -> void:
-	var ab := building_index("arms_factory")
-	for c in C:
-		var provs: PackedInt32Array = world.c_provinces[c]
-		var cur := 0
-		for p in provs:
-			cur += lvl[p * B + ab]
-		if cur == 0:
-			continue
-		var want: float = s.arms_demand(c) * 1.2
-		var target := maxi(1, int(ceil(want / (b_out_q[ab] * 0.93))))
-		if target >= cur:
-			continue
-		var excess := cur - target
-		for p in provs:
-			if excess <= 0:
-				break
-			var take := mini(excess, lvl[p * B + ab])
-			lvl[p * B + ab] -= take
-			excess -= take
-
-
 # =========================================================================== weekly tick
 func tick_week() -> void:
 	week += 1
 	var alive: PackedByteArray = s.alive
+	_own = world.p_owner
 	_refresh_country_mods(alive)
 	var P: int = world.province_count
 	for p in range(1, P):
@@ -962,7 +968,7 @@ func _phase_production(alive: PackedByteArray) -> void:
 	var psize: PackedFloat64Array = pops.size
 	var act := _act
 	for p in range(1, P):
-		var c: int = world.p_owner[p]
+		var c: int = _own[p]
 		var pb := p * PC
 		if c < 0 or alive[c] == 0:
 			continue
@@ -1056,25 +1062,64 @@ func _phase_household_demand(alive: PackedByteArray) -> void:
 	var P: int = world.province_count
 	var psize: PackedFloat64Array = pops.size
 	var pinc: PackedFloat64Array = pops.income
-	for p in range(1, P):
-		var c: int = world.p_owner[p]
-		if c < 0 or alive[c] == 0:
+	var NG := grp_b.size() - 1
+	# per-capita cost of every need group at today's prices, per country and profession
+	for c in C:
+		if alive[c] == 0:
 			continue
 		var cg := c * G
+		for prof in PC:
+			var base := (c * PC + prof) * NN
+			for gi in NG:
+				var cost := 0.0
+				for j in range(grp_b[gi], grp_b[gi + 1]):
+					cost += qpc[base + j] * mp[cg + n_good[j]]
+				_gcost[(c * PC + prof) * NG + gi] = cost
+	_hh_want.fill(0.0)
+	for p in range(1, P):
+		var c: int = _own[p]
+		if c < 0 or alive[c] == 0:
+			continue
 		var net := (1.0 - minf(TAX_BASE * _m_tax[c], 0.6)) * SPEND_SHARE
 		for prof in PC:
 			var i := p * PC + prof
 			var N := psize[i]
 			if N <= 0.0:
 				continue
-			_ration(c, prof, N, pinc[i] * net, false, _cwant, i * NN)
-			var cw := i * NN
+			var cp := c * PC + prof
+			var rem := pinc[i] * net / N
+			var gb := i * NG
+			var qb := cp * NN
+			var hb := c * NN
+			for gi in NG:
+				var cost := _gcost[cp * NG + gi]
+				var sc := 1.0
+				if cost > 0.0 and rem < cost:
+					sc = rem / cost
+				rem = maxf(rem - cost * sc, 0.0)
+				_gsc[gb + gi] = sc
+				var Ns := N * sc
+				for j in range(grp_b[gi], grp_b[gi + 1]):
+					_hh_want[hb + j] += Ns * qpc[qb + j]
+	for c in C:
+		if alive[c] == 0:
+			continue
+		var cg := c * G
+		for j in NN:
+			var want := _hh_want[c * NN + j]
+			if want > 0.0:
+				var g := n_good[j]
+				md[cg + g] += want
+				snk_flow[(cg + g) * T + TAG_POPS] += want
+
+
+func _build_qpc() -> void:
+	## Per-capita quantity wanted of each need, by country and profession (fish/grain scaling included).
+	qpc.resize(C * PC * NN)
+	for c in C:
+		for prof in PC:
 			for j in NN:
-				var want := _cwant[cw + j]
-				if want > 0.0:
-					var g := n_good[j]
-					md[cg + g] += want
-					snk_flow[(cg + g) * T + TAG_POPS] += want
+				qpc[(c * PC + prof) * NN + j] = n_qty[j] * n_mult[j * PC + prof] * need_scale[c * NN + j]
 
 
 ## Household shopping: spend `budget` on the needs basket, group by group; needs inside a group
@@ -1187,7 +1232,7 @@ func _phase_settle(alive: PackedByteArray) -> void:
 		sold[i] = 1.0 if (sp <= dm or sp <= 0.0) else dm / sp
 	# ---- buildings: revenue, wages, dividends
 	for p in range(1, P):
-		var c: int = world.p_owner[p]
+		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
 			continue
 		var base := p * B
@@ -1246,7 +1291,7 @@ func _phase_settle(alive: PackedByteArray) -> void:
 		tax_base[c] = 0.0
 		bud_mil[c] = 0.0
 	for p in range(1, P):
-		var c: int = world.p_owner[p]
+		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
 			continue
 		var pb := p * PC
@@ -1270,8 +1315,9 @@ func _phase_settle(alive: PackedByteArray) -> void:
 	var nf_den := PackedFloat64Array()
 	nf_den.resize(C * NN)
 	nf_den.fill(0.0)
+	var NG := grp_b.size() - 1
 	for p in range(1, P):
-		var c: int = world.p_owner[p]
+		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
 			continue
 		var cg := c * G
@@ -1281,20 +1327,17 @@ func _phase_settle(alive: PackedByteArray) -> void:
 			if N <= 0.0:
 				continue
 			var sol_t := 0.0
-			var cw := i * NN
-			for j in NN:
-				var ns := need_scale[c * NN + j]
-				var std := N * n_qty[j] * ns
-				if std <= 0.0:
-					continue
-				var g := n_good[j]
-				var frac := minf(1.0, _cwant[cw + j] * fill[cg + g] / std)
-				sol_t += need_w[c * NN + j] * frac
-				nf_num[c * NN + j] += N * frac
-				nf_den[c * NN + j] += N
+			var gb := i * NG
+			for gi in NG:
+				var sc := _gsc[gb + gi]
+				for j in range(grp_b[gi], grp_b[gi + 1]):
+					var frac := minf(1.0, n_mult[j * PC + prof] * sc * fill[cg + n_good[j]])
+					sol_t += need_w[c * NN + j] * frac
+					nf_num[c * NN + j] += N * frac
+					nf_den[c * NN + j] += N
 			psol[i] += SOL_SMOOTH * (20.0 * sol_t - psol[i])
 	for i in C * NN:
-		need_fill[i] = nf_num[i] / nf_den[i] if nf_den[i] > 0.0 else 1.0
+		need_fill[i] = nf_num[i] / nf_den[i] if (nf_den[i] > 0.0 and need_scale[i] > 0.0) else 1.0
 	# ---- hand results to the population
 	pops.employed = _emp.duplicate()
 	pops.income = _inc.duplicate()
@@ -1613,7 +1656,9 @@ func price_explanation(c: int, g: int) -> String:
 		var d: float = e[3]
 		var was: float = e[4]
 		var verb := "grew" if d > 0.0 else "fell"
-		var amt := ("%d%%" % int(round(absf(d) / was * 100.0))) if was > 0.0 else "from nothing"
+		var amt := "from nothing"
+		if was > 0.0:
+			amt = "%d%%" % int(round(absf(d) / was * 100.0)) if absf(d) / was < 5.0 else "sharply"
 		var txt := "%s %s %s" % [_tag_label(t, not is_demand), verb, amt]
 		if not is_demand and t < B and d < 0.0:
 			var cb := c * B + t
@@ -1806,6 +1851,7 @@ func from_dict(d: Dictionary) -> void:
 	if not d.has("mp"):
 		return
 	week = int(d.get("week", 0))
+	_seeded = true
 	for name: String in PERSIST_F64:
 		if d.has(name):
 			var arr := SimUtil.dec_f64(d[name])
@@ -1828,3 +1874,4 @@ func from_dict(d: Dictionary) -> void:
 		for k in pr.size():
 			lst.append({"province": pr[k], "type": ty[k], "progress": pg[k], "cost": co[k]})
 		queues[c] = lst
+	_build_qpc()
