@@ -1,0 +1,82 @@
+{
+  "countries": 14,
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+  "cpu_count": 4,
+  "engine": "4.3-stable (official)",
+  "gpu": "llvmpipe (LLVM 20.1.2, 256 bits)",
+  "gpu_vendor": "Mesa",
+  "phases": [
+    {
+      "avg_fps": 45.7,
+      "avg_ms": 21.89,
+      "frames": 274,
+      "low_1pct_fps": 30.6,
+      "max_ms": 36.84,
+      "p50_ms": 21.44,
+      "p95_ms": 26.22,
+      "p99_ms": 28.27,
+      "phase": "far_pan"
+    },
+    {
+      "avg_fps": 33.5,
+      "avg_ms": 29.86,
+      "frames": 168,
+      "low_1pct_fps": 19.5,
+      "max_ms": 51.21,
+      "p50_ms": 29.62,
+      "p95_ms": 40.43,
+      "p99_ms": 45.5,
+      "phase": "zoom_in"
+    },
+    {
+      "avg_fps": 37.5,
+      "avg_ms": 26.67,
+      "frames": 225,
+      "low_1pct_fps": 18.3,
+      "max_ms": 69.7,
+      "p50_ms": 26.25,
+      "p95_ms": 32.21,
+      "p99_ms": 34.47,
+      "phase": "regional_pan"
+    },
+    {
+      "avg_fps": 41,
+      "avg_ms": 24.39,
+      "frames": 247,
+      "low_1pct_fps": 28,
+      "max_ms": 36.78,
+      "p50_ms": 24.2,
+      "p95_ms": 28.95,
+      "p99_ms": 33.63,
+      "phase": "close_pan"
+    },
+    {
+      "avg_fps": 40.9,
+      "avg_ms": 24.46,
+      "frames": 245,
+      "low_1pct_fps": 26,
+      "max_ms": 39.33,
+      "p50_ms": 24.1,
+      "p95_ms": 31.55,
+      "p99_ms": 36.44,
+      "phase": "zoom_sweep"
+    },
+    {
+      "avg_fps": 29.3,
+      "avg_ms": 34.09,
+      "frames": 147,
+      "low_1pct_fps": 13.3,
+      "max_ms": 75.28,
+      "p50_ms": 31.61,
+      "p95_ms": 48.66,
+      "p99_ms": 54.47,
+      "phase": "select_spam"
+    }
+  ],
+  "provinces": 205,
+  "renderer": "gl_compatibility",
+  "resolution": "(1280, 720)",
+  "static_mem_mb": 50.1,
+  "static_mem_peak_mb": 54.9,
+  "video_mem_mb": 37
+}

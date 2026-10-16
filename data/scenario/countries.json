@@ -1,0 +1,19 @@
+{
+  "scenario": "The Age of Iron (1836)",
+  "countries": [
+    {"tag": "ALD", "name": "Kingdom of Aldmark", "short": "Aldmark", "adjective": "Aldish", "color": "#3b5ba5", "rank": "great", "government": "Constitutional Monarchy"},
+    {"tag": "VAR", "name": "Empire of Varossa", "short": "Varossa", "adjective": "Varossan", "color": "#a33a35", "rank": "great", "government": "Absolute Monarchy"},
+    {"tag": "CAL", "name": "Republic of Calvenne", "short": "Calvenne", "adjective": "Calvennois", "color": "#4f8a5b", "rank": "great", "government": "Republic"},
+    {"tag": "UZM", "name": "Khanate of Uzmar", "short": "Uzmar", "adjective": "Uzmari", "color": "#b07d4f", "rank": "major", "government": "Autocracy"},
+    {"tag": "OST", "name": "Grand Duchy of Ostrova", "short": "Ostrova", "adjective": "Ostrovan", "color": "#7656a3", "rank": "major", "government": "Absolute Monarchy"},
+    {"tag": "TAR", "name": "Sublime Realm of Tarsikh", "short": "Tarsikh", "adjective": "Tarsikhi", "color": "#c49a3c", "rank": "major", "government": "Theocratic Monarchy"},
+    {"tag": "LUS", "name": "Kingdom of Lusavia", "short": "Lusavia", "adjective": "Lusavian", "color": "#d3c35e", "rank": "major", "government": "Constitutional Monarchy"},
+    {"tag": "MER", "name": "Principality of Merrow", "short": "Merrow", "adjective": "Merrowan", "color": "#55a3a8", "rank": "minor", "government": "Principality"},
+    {"tag": "HAN", "name": "Free Cities of Hanswick", "short": "Hanswick", "adjective": "Hanswicker", "color": "#b5668a", "rank": "minor", "government": "Merchant Republic"},
+    {"tag": "BRZ", "name": "Electorate of Brenz", "short": "Brenz", "adjective": "Brenzish", "color": "#6b7d8f", "rank": "minor", "government": "Elective Monarchy"},
+    {"tag": "SAL", "name": "Kingdom of Saldria", "short": "Saldria", "adjective": "Saldrian", "color": "#9c573a", "rank": "minor", "government": "Absolute Monarchy"},
+    {"tag": "VEL", "name": "Confederation of Vell", "short": "Vell", "adjective": "Vellish", "color": "#8ba35a", "rank": "minor", "government": "Confederation"},
+    {"tag": "COR", "name": "Duchy of Corvain", "short": "Corvain", "adjective": "Corvanese", "color": "#3f6f8a", "rank": "minor", "government": "Duchy"},
+    {"tag": "NOR", "name": "Kingdom of Norrhavn", "short": "Norrhavn", "adjective": "Norrish", "color": "#7fa6cc", "rank": "minor", "government": "Constitutional Monarchy"}
+  ]
+}
