@@ -6,7 +6,7 @@ shader_type canvas_item;
 
 uniform sampler2D terrain_tex : filter_linear_mipmap, repeat_disable;
 uniform sampler2D id_tex : filter_nearest, repeat_disable;
-// Row 0: owner colour (a = owned). Row 1: r = owner index+1 /255, g = selected
+// Row 2: occupier colour (a = province is occupied). Row 0: owner colour (a = owned). Row 1: r = owner index+1 /255, g = selected
 // province, b = hovered province, a = belongs to selected country.
 uniform sampler2D lookup_tex : filter_nearest, repeat_disable;
 uniform vec2 map_size = vec2(2048.0, 1024.0);

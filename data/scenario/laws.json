@@ -1,0 +1,55 @@
+{
+  "_note": "Modifier keys: *_mult keys are offsets from 1.0 (politics.modifier returns 1 + sum for tax_mult/research_mult/radicalism_mult); all other keys are plain sums. 'franchise' = voting weight per profession used for interest-group clout; 'wealth_exp' flattens wealth differences (lower = more equal). 'months' = base time to pass.",
+  "categories": [
+    {"id": "governance", "name": "Governance", "months": 12, "options": [
+      {"id": "autocracy", "name": "Autocracy", "desc": "A single ruler and the army and nobility govern. The people have no vote.",
+       "modifiers": {"research_mult": -0.10, "conscription_rate": 0.005, "radicalism_mult": 0.05},
+       "franchise": {"peasant": 0.02, "laborer": 0.02, "machinist": 0.03, "clerk": 0.10, "aristocrat": 1.0, "capitalist": 0.5, "soldier": 1.0}, "wealth_exp": 1.0, "requires_tech": null},
+      {"id": "oligarchy", "name": "Oligarchy", "desc": "Landed and propertied elites govern through councils.",
+       "modifiers": {"research_mult": 0.0, "trade_bonus": 0.03},
+       "franchise": {"peasant": 0.03, "laborer": 0.03, "machinist": 0.08, "clerk": 0.25, "aristocrat": 1.0, "capitalist": 1.0, "soldier": 0.5}, "wealth_exp": 1.0, "requires_tech": null},
+      {"id": "census_suffrage", "name": "Census Suffrage", "desc": "Property and literacy qualifications decide who votes.",
+       "modifiers": {"research_mult": 0.05, "radicalism_mult": -0.05},
+       "franchise": {"peasant": 0.12, "laborer": 0.12, "machinist": 0.45, "clerk": 1.0, "aristocrat": 1.0, "capitalist": 1.0, "soldier": 0.3}, "wealth_exp": 0.8, "requires_tech": "constitutionalism"},
+      {"id": "universal_suffrage", "name": "Universal Suffrage", "desc": "Every adult has a vote. Elections shape the government.",
+       "modifiers": {"research_mult": 0.05, "radicalism_mult": -0.12, "tax_mult": -0.03},
+       "franchise": {"peasant": 1.0, "laborer": 1.0, "machinist": 1.0, "clerk": 1.0, "aristocrat": 1.0, "capitalist": 1.0, "soldier": 1.0}, "wealth_exp": 0.35, "requires_tech": "mass_politics"}
+    ]},
+    {"id": "taxation", "name": "Taxation", "months": 3, "options": [
+      {"id": "low", "name": "Low Taxes", "desc": "A light burden. Revenue is thin.",
+       "modifiers": {"tax_mult": -0.35, "radicalism_mult": -0.05}, "requires_tech": null},
+      {"id": "medium", "name": "Moderate Taxes", "desc": "The customary burden.",
+       "modifiers": {}, "requires_tech": null},
+      {"id": "high", "name": "Heavy Taxes", "desc": "Revenue rises, resentment too.",
+       "modifiers": {"tax_mult": 0.40, "radicalism_mult": 0.10}, "requires_tech": null}
+    ]},
+    {"id": "trade", "name": "Trade Policy", "months": 4, "options": [
+      {"id": "protectionism", "name": "Protectionism", "desc": "Tariffs shield home industry and fill the treasury.",
+       "modifiers": {"tariff": 0.20, "trade_bonus": -0.10}, "requires_tech": null},
+      {"id": "free_trade", "name": "Free Trade", "desc": "Open borders for goods. Trade partners benefit more.",
+       "modifiers": {"tariff": 0.0, "trade_bonus": 0.15}, "requires_tech": null}
+    ]},
+    {"id": "labor", "name": "Labor Rights", "months": 6, "options": [
+      {"id": "no_rights", "name": "No Labor Rights", "desc": "Workers may not organize.",
+       "modifiers": {"wage_floor": 0.0, "radicalism_mult": 0.10}, "requires_tech": null},
+      {"id": "basic_rights", "name": "Basic Labor Rights", "desc": "Limited right to organize and a minimum wage.",
+       "modifiers": {"wage_floor": 0.06, "radicalism_mult": -0.05}, "requires_tech": "labor_organizing"},
+      {"id": "workers_protection", "name": "Workers' Protection", "desc": "Safety rules, wage floor, strong unions.",
+       "modifiers": {"wage_floor": 0.14, "radicalism_mult": -0.15, "tax_mult": -0.05}, "requires_tech": "social_reform"}
+    ]},
+    {"id": "education", "name": "Education", "months": 6, "options": [
+      {"id": "none", "name": "No Public Schooling", "desc": "Learning is left to families.",
+       "modifiers": {"literacy_growth": 0.0}, "requires_tech": null},
+      {"id": "religious_schools", "name": "Religious Schools", "desc": "Parish schools teach reading and catechism.",
+       "modifiers": {"literacy_growth": 0.004}, "requires_tech": null},
+      {"id": "public_schools", "name": "Public Schools", "desc": "State schools for every child.",
+       "modifiers": {"literacy_growth": 0.010, "research_mult": 0.10, "tax_mult": -0.03}, "requires_tech": "primary_schools"}
+    ]},
+    {"id": "conscription", "name": "Conscription", "months": 4, "options": [
+      {"id": "volunteers", "name": "Volunteer Army", "desc": "Only professionals and volunteers serve.",
+       "modifiers": {"conscription_rate": 0.010}, "requires_tech": null},
+      {"id": "mass_conscription", "name": "Mass Conscription", "desc": "Every able man owes service.",
+       "modifiers": {"conscription_rate": 0.030, "radicalism_mult": 0.05}, "requires_tech": "conscript_doctrine"}
+    ]}
+  ]
+}

@@ -7,8 +7,12 @@ config_version=5
 
 config/name="Iron & Society"
 config/description="Performance-first historical grand strategy."
-run/main_scene="res://scenes/main.tscn"
+run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[autoload]
+
+Session="*res://src/game/session.gd"
 
 [display]
 

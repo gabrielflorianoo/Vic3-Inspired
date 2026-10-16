@@ -10,6 +10,9 @@ var mode: int = Mode.POLITICAL
 var selected_province := 0
 var selected_country := -1
 var hovered_province := 0
+## Optional (province:int) -> controlling country. Differs from the owner while
+## a province is occupied; those provinces are drawn with diagonal stripes.
+var controller_fn := Callable()
 
 var _lookup_img: Image
 var _lookup_tex: ImageTexture
@@ -28,7 +31,7 @@ func setup(w: RefCounted) -> void:
 	_mat.set_shader_parameter("id_tex", ImageTexture.create_from_image(world.id_image))
 	_mat.set_shader_parameter("map_size", Vector2(world.width, world.height))
 	material = _mat
-	_lookup_img = Image.create(world.province_count, 2, false, Image.FORMAT_RGBA8)
+	_lookup_img = Image.create(world.province_count, 3, false, Image.FORMAT_RGBA8)
 	_lookup_tex = ImageTexture.create_from_image(_lookup_img)
 	_mat.set_shader_parameter("lookup_tex", _lookup_tex)
 	refresh_all()
@@ -51,6 +54,14 @@ func _write(id: int) -> void:
 	_lookup_img.set_pixel(id, 0, c)
 	_lookup_img.set_pixel(id, 1, Color8(o + 1, 255 if id == selected_province and id > 0 else 0,
 		255 if id == hovered_province and id > 0 else 0, 255 if o >= 0 and o == selected_country else 0))
+	# Row 2: occupation. rgb = occupier colour, a = 1 when controlled by someone else.
+	var occ := Color(0, 0, 0, 0)
+	if controller_fn.is_valid() and o >= 0:
+		var ctl: int = controller_fn.call(id)
+		if ctl >= 0 and ctl != o:
+			occ = world.c_color[ctl]
+			occ.a = 1.0
+	_lookup_img.set_pixel(id, 2, occ)
 
 
 func set_mode(m: int) -> void:
