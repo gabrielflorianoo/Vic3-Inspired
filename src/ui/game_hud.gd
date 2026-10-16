@@ -71,6 +71,7 @@ var _last_refresh := 0.0
 var _hist: Array = []     # per good: PackedFloat32Array of recent prices
 var _tabs_row: HBoxContainer
 var _top: PanelContainer
+var _top_row: HBoxContainer
 
 
 func setup(w: RefCounted, s: RefCounted, c: Node) -> void:
@@ -141,6 +142,8 @@ func _build_top_bar() -> void:
 		h.add_child(l)
 	h.add_child(K.spacer())
 	h.add_child(K.btn("Menu", "Pause menu (Esc)", menu_requested.emit))
+	_top_row = h
+	resized.connect(_fit_top_bar)
 
 
 func _build_tabs() -> void:
@@ -277,6 +280,21 @@ func mouse_over_ui(pos: Vector2) -> bool:
 
 # --------------------------------------------------------------- top bar
 
+## Keeps the Menu button on screen at any window size / UI scale: lowest-priority stats are hidden
+## (their numbers live in the Overview panel) until the whole row fits.
+func _fit_top_bar() -> void:
+	if _top_row == null or _bar_res == null:
+		return
+	var order: Array = [_bar_res, _bar_gdp, _bar_pop, _bar_rad, _bar_leg]   # hidden first -> last
+	for l: Control in order:
+		l.visible = true
+	var avail := size.x - 24.0
+	for l: Control in order:
+		if _top_row.get_combined_minimum_size().x <= avail:
+			break
+		l.visible = false
+
+
 func update_bar(full: bool) -> void:
 	_bar_date.text = state.date_string()
 	if not full:
@@ -315,6 +333,7 @@ func update_bar(full: bool) -> void:
 		_bar_res.text = "%s %d%%" % [state.tech.tech_name(rid), int(state.tech.progress(c) * 100.0)]
 		_bar_res.add_theme_color_override("font_color", K.INK)
 		_bar_res.tooltip_text = "Researching %s\n%.1f points / week" % [state.tech.tech_name(rid), state.tech.points_per_week(c)]
+	_fit_top_bar.call_deferred()
 
 
 func _on_speed_changed(speed: int) -> void:

@@ -26,6 +26,9 @@ func _ready() -> void:
 	if "--benchmark" in args:
 		K.session().start_benchmark()
 		return
+	if "--continue" in args:
+		if K.session().start_continue():
+			return
 	if "--newgame" in args:
 		K.session().start_new()
 		return

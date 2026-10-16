@@ -136,6 +136,7 @@ func test_static_api() -> void:
 		claims_total += dip.claims_of(c).size()
 	check(claims_total > 5, "claims exist at start (%d)" % claims_total)
 	print("   claims=%d alliances=%d trade=%d" % [claims_total, dip.alliances.size(), dip.trade.size()])
+	st.dispose()
 
 
 func _find_pair(st) -> Array:
@@ -155,6 +156,7 @@ func test_scripted_war() -> void:
 	var pair := _find_pair(st)
 	check(not pair.is_empty(), "found a bordering pair")
 	if pair.is_empty():
+		st.dispose()
 		return
 	var a: int = pair[0]
 	var b: int = pair[1]
@@ -215,6 +217,7 @@ func test_scripted_war() -> void:
 			_run_days(st, 40)
 			var o: Dictionary = st.diplo.offer_peace(wid, a, "white_peace")
 			check(o.has("ok") and o.has("reason"), "offer_peace returns ok/reason")
+	st.dispose()
 
 
 func test_politics_actions() -> void:
@@ -264,6 +267,7 @@ func test_politics_actions() -> void:
 		var rt: Dictionary = d.propose_trade_agreement(0, b)
 		check(rt.has("ok") and rt.has("reason"), "trade result")
 	check(d.declare_rival(0, 7)["ok"] or d.is_rival(0, 7) or d.rivals(0).size() >= 2, "declare_rival")
+	st.dispose()
 
 
 func test_long_run() -> void:
@@ -339,7 +343,19 @@ func test_determinism_and_save() -> void:
 	b.dispose()
 	var snap: Dictionary = JSON.parse_string(json_text)
 	var restored = _restore(snap)
-	check(_hash(restored) == h400, "restored state equals original at save time")
+	var same_at_save := _hash(restored) == h400
+	check(same_at_save, "restored state equals original at save time")
+	if not same_at_save:
+		var d0: Dictionary = JSON.parse_string(json_text)
+		var dr0 := _snap(restored)
+		for k in ["politics", "tech", "diplo", "military", "ai", "owner", "day"]:
+			var x := JSON.stringify(d0[k], "", true)
+			var y := JSON.stringify(dr0[k], "", true)
+			if x != y:
+				var i := 0
+				while i < mini(x.length(), y.length()) and x[i] == y[i]:
+					i += 1
+				print("   differs: ", k, " at char ", i, "\n     orig: ", x.substr(maxi(0, i - 60), 140), "\n     rest: ", y.substr(maxi(0, i - 60), 140))
 	_run_days(restored, 500)
 	var hr := _hash(restored)
 	check(ha == hr, "original and restored stay identical after 500 more days")

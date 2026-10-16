@@ -153,9 +153,7 @@ func _taxes(c: int) -> void:
 
 
 func _treasury(c: int) -> float:
-	if s.econ.has_method("treasury_of"):
-		return float(s.econ.treasury_of(c))
-	return float(s.econ.treasury[c])
+	return float(s.econ.treasury_of(c))
 
 
 func _good_price(c: int, gid: String) -> float:

@@ -87,9 +87,9 @@ static func latest_save() -> String:
 static func load_game(world, path: String):
 	var j := _read_header(path)
 	if j.is_empty() or not j.has("state"):
-		push_error("Unreadable save: " + path)
+		print("save_system: Unreadable save: " + path)
 		return null
 	if int(j.get("version", 0)) != VERSION:
-		push_error("Unsupported save version in " + path)
+		print("save_system: Unsupported save version in " + path)
 		return null
 	return GameState.from_dict(world, j["state"])

@@ -1,5 +1,67 @@
 # Development Log
 
+## 2026-10-16 — Milestone 2: playable game (menu, nation pick, simulation, AI, saves)
+
+### What was built
+- **Game flow**: main menu (New Game / Continue / Load / Settings / Quit) -> New Game asks for a province and you play its owning
+  country -> HUD with top bar (date, pause + speeds 1-5, treasury/pop/GDP/legitimacy/radicals/research), nine tab panels
+  (Overview, Market, Buildings, Population, Politics, Technology, Diplomacy, Military, Events), province card, toasts, pause menu,
+  save/load dialog, settings (window mode, resolution, vsync, UI scale, map detail, perf overlay, autosave).
+- **Simulation** (`src/sim/`): calendar + module wiring (`game_state.gd`), population cohorts (7 professions x province), market economy
+  with construction queue and budget, politics (interest groups, laws, legitimacy, elections, revolutions), technology (3 trees),
+  diplomacy (relations, alliances, trade agreements, rivals, claims, wars, peace), military (battalions, sieges, occupation),
+  AI for every non-player country, JSON saves (arrays are base64 raw bytes, so state round-trips bit-exactly).
+- Contract: `docs/GAMEPLAY_SPEC.md`.
+
+### Integration fixes in this pass
+- `has_method`-guarded calls: every guarded name now verified against the real definitions (all exist; `literacy_of` is the call used
+  everywhere, the `pops.literacy` array is per-cohort). Scripted cross-module call check found no other mismatches.
+- Saves: `military.gd`, `diplomacy.gd` scalar doubles (batt_size, warscore, battle, siege progress) are now bit-exact (`SimUtil.num_str`, hex of the IEEE
+  bytes); military float arrays are base64. `String.num(x, 17)` was *not* exact (caught by the determinism test).
+- `sim_util.gd` never calls `Marshalls` with empty data (no more `raw_to_base64` errors).
+- `ai.gd` `_treasury` simplified to `econ.treasury_of(c)` (the old fallback indexed `econ.treasury`, which is a method).
+- Failed save loads no longer use `push_error` (negative tests and "bad file" dialogs produce no engine ERROR lines).
+- Top bar adapts to width/UI scale: lowest-priority stats are hidden until the row fits, so the Menu button is never clipped (checked at 1600x900, UI 150%).
+- `game_controller.gd`: after any day that ran a weekly or monthly tick the frame stops stepping, so at speed 5 at most one weekly/monthly tick runs per frame
+  (a weekly tick is atomic, ~20 ms). Also guarantees one price-history sample per week.
+- `politics.gd`: monthly tick 12.4 -> ~8 ms (no explanation strings when only numbers are needed, typed arrays in the hot loop, one `avg_sol` per call).
+- New dev tools: `--continue`, `--monkey=SECONDS` UI fuzzer (`src/game/monkey.gd`), `tests/run_all.sh`; `test_strategy.gd` now disposes every state and prints which module differs on a save/restore mismatch.
+
+### Architecture / performance notes
+- `GameController` accumulates day credit by speed (1, 3, 8, 20 days/s, or maximum), caps work to ~8 ms/frame and stops after the first weekly/monthly tick.
+  The UI gets one `stepped` signal per frame, panels refresh at most every 0.5 s and only on weekly ticks or user actions.
+- Modules hold flat packed arrays (`PackedFloat64Array` per cohort / per country x good), no per-pop objects; GameState <-> module references are cycles, so `dispose()` must be called
+  when a state is discarded (tests and the game do).
+- A week and a month tick falling on the same day still run in one frame (~45 ms worst case in the benchmark): the sim has no sub-day stepping.
+
+### Tests ACTUALLY run (this session, Godot 4.3, headless)
+- `tests/run_tests.gd`: **591 checks, 0 failed** (~15 s). World/generator/ID codec, calendar, determinism, JSON save round-trip (bit-exact state), economy invariants, price chains, population response, construction/ownership transfer.
+- `tests/test_strategy.gd`: **7216 checks, 0 failed** (~25 s), mode "REAL GameState". Static API, scripted war, politics actions, a 5-year run (6 wars started/ended, 19 laws enacted, 122 techs, 154 battles, no revolutions, legitimacy 43..64) and determinism + save/restore over 900 days.
+- Neither run prints SCRIPT ERROR / ERROR / Invalid lines (verified by grep).
+- `--monkey` UI fuzzer under Xvfb at speed 5: 100 s run = 214 button presses over all tabs, simulated 6377 days (17 years), 0 errors; further runs on other countries (15 s and 60 s), 0 errors. The player researched 9-16 techs in those runs.
+- Rendered screenshots inspected for menu, nation pick, Market/Politics/Diplomacy/Overview/Military tabs, pause menu, settings, Continue (loads the newest autosave), and UI scale 150% at 1600x900.
+- `--benchmark` (map) still works. Exports: **Windows** (.exe + .pck) and **Linux** release exports succeed; the exported Linux build was run with `--autostart=3 --run-days=400 --monkey=10` (all `data/scenario/*.json` are packed; game started and ran). The Windows build was not launched.
+
+### Sim benchmark (`tools/sim_benchmark.gd`, 5 simulated years, 14 countries, 205 provinces, container CPU, not target HW)
+| tick | n | avg ms | max ms |
+|---|---|---|---|
+| plain day | 1514 | 0.17 | 0.46 |
+| week day (econ+pops+tech+diplo+mil) | 251 | 22.0 | 27.5 |
+| month day | 60 | 21.0 | 44.4 |
+| all days | 1825 | 3.86 | 44.4 |
+Per subsystem avg: econ.week 20.1, politics.month 8.0, ai.month 5.2, pops.month 3.4, tech.week 0.8, military.week 0.7, diplo.month 0.8. `new_game` (build + 12 warm-up weeks) 362 ms. Save: `to_dict` + stringify 27.9 ms, 0.77 MB.
+Economy after 5 years: pop 62.0M -> 64.5M, GDP 2.52B -> 2.75B/yr, avg SoL 11.2 -> 12.9, unemployment 5-10%.
+Map benchmark (llvmpipe, 1280x720): 28-36 fps average per phase (software rendering; regression baseline only).
+
+### Known limitations
+- Target hardware (Q8300 / R7 350) still unmeasured; weekly tick (~20 ms) alone exceeds a 16.6 ms frame, so speeds >= 3 show one slower frame per simulated week.
+- Week + month ticks on the same day cost up to ~45 ms in one frame.
+- The player has no automatic research queue: "Research: none!" appears when a tech completes; the player must pick the next one.
+- Toast stack can overlap the province card at UI scale 150% on small windows.
+- War events are logged once per participant, so the same text can appear twice in the event log / test output.
+- No tutorial, no sound, no per-province detail for buildings beyond the list; AI is heuristic (builds, researches, enacts laws, declares wars) and not tuned for balance.
+- Windows build not launched; no icon/version resources.
+
 ## 2026-10-16 — Milestone 1: Technical foundation
 
 ### Environment (inspected)

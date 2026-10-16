@@ -268,7 +268,7 @@ func clout(c: int, ig: int) -> float:
 func approval(c: int, ig: int) -> float:
 	## Always equals the sum of approval_breakdown (computed live; the monthly cache is only for legitimacy).
 	var t := 0.0
-	for e: Dictionary in approval_breakdown(c, ig):
+	for e: Dictionary in approval_breakdown(c, ig, false):
 		t += float(e["value"])
 	return clampf(t, -10.0, 10.0)
 
@@ -331,20 +331,24 @@ func _literacy(c: int) -> float:
 func _ig_cohort_avg(c: int, ig: int, arr_name: String, fallback: float) -> float:
 	if s.pops == null:
 		return fallback
-	var arr = s.pops.get(arr_name)
-	var size = s.pops.get("size")
-	if arr == null or size == null:
+	var arr_v: Variant = s.pops.get(arr_name)
+	var size_v: Variant = s.pops.get("size")
+	if not (arr_v is PackedFloat64Array) or not (size_v is PackedFloat64Array):
 		return fallback
+	var arr: PackedFloat64Array = arr_v   # typed locals: Variant indexing in this hot loop is ~10x slower
+	var size: PackedFloat64Array = size_v
 	var num := 0.0
 	var den := 0.0
 	var sup: Dictionary = _igs[ig]["supporters"]
-	for p in s.world.c_provinces[c]:
-		for pi in sup:
+	var keys: Array = sup.keys()
+	var n := size.size()
+	for p: int in s.world.c_provinces[c]:
+		for pi: int in keys:
 			var idx: int = p * PROF_COUNT + pi
-			if idx >= size.size():
+			if idx >= n:
 				continue
-			var w: float = float(size[idx]) * float(sup[pi])
-			num += w * float(arr[idx])
+			var w: float = size[idx] * float(sup[pi])
+			num += w * arr[idx]
 			den += w
 	return num / den if den > 0.0 else fallback
 
@@ -379,14 +383,28 @@ func clout_breakdown(c: int, ig: int) -> Array:
 
 
 func _refresh_clout(c: int) -> void:
+	# Same formula as clout_breakdown, without building the explanation strings (this runs monthly
+	# for every country); per-profession counts and literacy are gathered once, not per group.
 	var ig_n := _igs.size()
+	var gov: Dictionary = _opt[laws[c]["governance"]]
+	var fr: Dictionary = gov["franchise"]
+	var we := float(gov.get("wealth_exp", 1.0))
+	var counts := PackedFloat64Array()
+	counts.resize(PROFS.size())
+	for pi in PROFS.size():
+		counts[pi] = _prof_count(c, pi)
+	var lit_mult := 0.5 + _literacy(c)
 	var raw := PackedFloat32Array()
 	raw.resize(ig_n)
 	var tot := 0.0
 	for i in ig_n:
 		var v := 0.0
-		for e: Dictionary in clout_breakdown(c, i):
-			v += float(e["value"])
+		var sup: Dictionary = _igs[i]["supporters"]
+		for pi in sup:
+			var x: float = counts[pi] * float(sup[pi]) * pow(WEALTH[pi], we) * float(fr.get(PROFS[pi], 0.05))
+			if pi == 3:
+				x *= lit_mult
+			v += x
 		raw[i] = v
 		tot += v
 	for i in ig_n:
@@ -394,8 +412,9 @@ func _refresh_clout(c: int) -> void:
 
 
 # --------------------------------------------------------------------------- approval
-func approval_breakdown(c: int, ig: int) -> Array:
+func approval_breakdown(c: int, ig: int, text := true) -> Array:
 	## Every factor behind approval(c, ig): [{reason, value}], summing to approval (clamped to -10..10).
+	## text=false skips building the reason strings (monthly refresh only needs the numbers).
 	var out: Array = []
 	var g: Dictionary = _igs[ig]
 	var prefs: Dictionary = g["prefs"]
@@ -403,19 +422,20 @@ func approval_breakdown(c: int, ig: int) -> Array:
 		var oid: String = laws[c][cat["id"]]
 		var pv := float(prefs.get(oid, 0.0))
 		if pv != 0.0:
-			out.append({"reason": "%s %s (%s)" % ["Likes" if pv > 0.0 else "Dislikes", _opt[oid]["name"], cat["name"]], "value": pv})
+			out.append({"reason": ("%s %s (%s)" % ["Likes" if pv > 0.0 else "Dislikes", _opt[oid]["name"], cat["name"]]) if text else "", "value": pv})
 	# Standard of living of the group's own supporters
-	var gsol := _ig_cohort_avg(c, ig, "sol", _avg_sol(c))
+	var asol := _avg_sol(c)
+	var gsol := _ig_cohort_avg(c, ig, "sol", asol)
 	var sol_term := clampf((gsol - 8.0) * 0.3, -2.5, 2.5)
 	if absf(sol_term) > 0.01:
-		out.append({"reason": "Supporters' standard of living is %.1f (%s 8.0 baseline)" % [gsol, "above" if gsol >= 8.0 else "below"], "value": sol_term})
-	var dsol := _avg_sol(c) - prev_sol[c]
+		out.append({"reason": ("Supporters' standard of living is %.1f (%s 8.0 baseline)" % [gsol, "above" if gsol >= 8.0 else "below"]) if text else "", "value": sol_term})
+	var dsol := asol - prev_sol[c]
 	var trend := clampf(dsol * 2.0, -2.0, 2.0)
 	if absf(trend) > 0.01:
-		out.append({"reason": "Standard of living %s over the last month (%+.2f)" % ["rising" if dsol > 0.0 else "falling", dsol], "value": trend})
+		out.append({"reason": ("Standard of living %s over the last month (%+.2f)" % ["rising" if dsol > 0.0 else "falling", dsol]) if text else "", "value": trend})
 	var rad := _ig_cohort_avg(c, ig, "radicalism", 0.0)
 	if rad > 0.05:
-		out.append({"reason": "Radical supporters (%d%% radicalism)" % int(rad * 100.0), "value": -rad * 4.0})
+		out.append({"reason": ("Radical supporters (%d%% radicalism)" % int(rad * 100.0)) if text else "", "value": -rad * 4.0})
 	if in_government(c, ig):
 		out.append({"reason": "Part of the ruling coalition", "value": 2.0})
 	elif clout(c, ig) > 0.15:
@@ -424,10 +444,10 @@ func approval_breakdown(c: int, ig: int) -> Array:
 		out.append({"reason": "State is in debt", "value": -1.0 * float(g["debt_sensitivity"])})
 	var ex := _exhaustion(c)
 	if ex > 5.0:
-		out.append({"reason": "War exhaustion (%d)" % int(ex), "value": -ex / 25.0 * (1.5 if g["war_attitude"] < 0.0 else 0.7)})
+		out.append({"reason": ("War exhaustion (%d)" % int(ex)) if text else "", "value": -ex / 25.0 * (1.5 if g["war_attitude"] < 0.0 else 0.7)})
 	var wc := _war_count(c)
 	if wc > 0 and float(g["war_attitude"]) != 0.0:
-		out.append({"reason": "%s the ongoing war" % ("Supports" if g["war_attitude"] > 0.0 else "Opposes"), "value": float(g["war_attitude"]) * minf(wc, 2)})
+		out.append({"reason": ("%s the ongoing war" % ("Supports" if g["war_attitude"] > 0.0 else "Opposes")) if text else "", "value": float(g["war_attitude"]) * minf(wc, 2)})
 	var sum := 0.0
 	for e: Dictionary in out:
 		sum += float(e["value"])
@@ -440,7 +460,7 @@ func _refresh_approval(c: int) -> void:
 	var ig_n := _igs.size()
 	for i in ig_n:
 		var t := 0.0
-		for e: Dictionary in approval_breakdown(c, i):
+		for e: Dictionary in approval_breakdown(c, i, false):
 			t += float(e["value"])
 		approval_cache[c * ig_n + i] = clampf(t, -10.0, 10.0)
 

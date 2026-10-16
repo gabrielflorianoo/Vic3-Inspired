@@ -12,6 +12,7 @@ extends Node2D
 ##   --view=x,y,zoom --select=<province> --mode=<0..2> --low
 ##   --tab=<overview|market|...>   open a panel   --speed=<0..5>
 ##   --run-days=<n>                simulate n days before the first frame
+##   --monkey=<seconds>            UI fuzzer: random tabs/buttons while running (dev)
 
 const WorldData := preload("res://src/world/world_data.gd")
 const MapView := preload("res://src/map/map_view.gd")
@@ -138,6 +139,12 @@ func _apply_dev_args() -> void:
 			delay = float(v)
 		elif a.begins_with("--shot="):
 			shot = v
+		elif a.begins_with("--monkey=") and hud != null:
+			var mk: Node = preload("res://src/game/monkey.gd").new()
+			mk.hud = hud
+			mk.ctrl = ctrl
+			mk.duration = float(v)
+			add_child(mk)
 		elif a == "--pause-menu" and pause_menu != null:
 			_toggle_pause_menu()
 	if shot != "":

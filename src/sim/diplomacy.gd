@@ -4,6 +4,7 @@ extends RefCounted
 ## Deviation from spec: actions cost "diplomatic points" (dp, +1/month, max 20) instead of money because the
 ## economy has no spend API. dp(c) is exposed for the UI.
 
+const SimUtil := preload("res://src/sim/sim_util.gd")
 const MAX_ALLIES := 3
 const MAX_TRADE := 4
 const MAX_RIVALS := 2
@@ -119,8 +120,8 @@ func to_dict() -> Dictionary:
 	var wd := []
 	for w: Dictionary in wars:
 		var e := w.duplicate(true)
-		e["warscore"] = String.num(float(w["warscore"]), 17)   # JSON would round doubles to 15 digits
-		e["battle"] = String.num(float(w["battle"]), 17)
+		e["warscore"] = SimUtil.num_str(float(w["warscore"]))   # bit-exact; JSON would round doubles
+		e["battle"] = SimUtil.num_str(float(w["battle"]))
 		wd.append(e)
 	return {"base": Array(base_rel), "improve": Array(improve), "il": Array(improve_left), "grudge": Array(grudge),
 		"al": al, "tr": tr, "tc": tc, "rl": rl, "cl": cl, "wars": wd, "ex": Array(exhaustion),
@@ -165,7 +166,7 @@ func from_dict(d: Dictionary) -> void:
 		var nw := w.duplicate(true)
 		nw["id"] = int(w["id"]); nw["start_day"] = int(w["start_day"])
 		nw["attackers"] = _ints(w["attackers"]); nw["defenders"] = _ints(w["defenders"]); nw["goals"] = _ints(w["goals"])
-		nw["warscore"] = String(w["warscore"]).to_float(); nw["battle"] = String(w.get("battle", "0")).to_float()
+		nw["warscore"] = SimUtil.parse_num(w["warscore"]); nw["battle"] = SimUtil.parse_num(w.get("battle", 0.0))
 		nw["leader_a"] = int(w["leader_a"]); nw["leader_d"] = int(w["leader_d"])
 		nw["cap_weeks"] = int(w.get("cap_weeks", 0))
 		wars.append(nw)

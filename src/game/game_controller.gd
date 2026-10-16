@@ -58,12 +58,17 @@ func _process(delta: float) -> void:
 		state.advance_day()
 		_credit -= 1.0
 		days += 1
+		var heavy := false
 		if state.day % 7 == 0:
 			week = true
+			heavy = true
 		if state.day_of_month() == 1:
 			month = true
+			heavy = true
 			_maybe_autosave()
-		if (Time.get_ticks_usec() - t0) / 1000.0 >= BUDGET_MS:
+		# A weekly/monthly tick is atomic (~15-20 ms), so never run a second one in the same
+		# frame: stop right after the first, even if the time budget is not yet spent.
+		if heavy or (Time.get_ticks_usec() - t0) / 1000.0 >= BUDGET_MS:
 			break
 	if speed == 5:
 		_credit = 0.0

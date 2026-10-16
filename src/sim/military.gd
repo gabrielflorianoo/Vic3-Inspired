@@ -5,6 +5,7 @@ extends RefCounted
 ## Deviation from spec: power uses eq = 0.4 + 0.6 * equipment_fill so an arms shortage hurts without zeroing the army.
 
 const Biome := preload("res://src/world/biome.gd")
+const SimUtil := preload("res://src/sim/sim_util.gd")
 const PROF_SOLDIER := 6
 const PROF_COUNT := 7
 const UPKEEP_PER_MAN := 0.8   # money / week / man under arms
@@ -50,18 +51,19 @@ func setup(state) -> void:
 func to_dict() -> Dictionary:
 	var sg := []
 	for p in siege:
-		sg.append([int(p), int(siege[p]["by"]), String.num(float(siege[p]["prog"]), 17)])
-	return {"bs": batt_size, "bat": Array(bat), "est": Array(est), "mor": Array(morale), "occ": Array(occupier),
-		"siege": sg, "cas": Array(casualties), "battles": battles, "recent": recent.duplicate(true)}
+		sg.append([int(p), int(siege[p]["by"]), SimUtil.num_str(float(siege[p]["prog"]))])
+	return {"bs": SimUtil.num_str(batt_size), "bat": SimUtil.enc_f32(bat), "est": SimUtil.enc_f32(est),
+		"mor": SimUtil.enc_f32(morale), "occ": Array(occupier),
+		"siege": sg, "cas": SimUtil.enc_f32(casualties), "battles": battles, "recent": recent.duplicate(true)}
 
 
 func from_dict(d: Dictionary) -> void:
 	_n = s.world.country_count
-	batt_size = float(d.get("bs", 1000.0))
-	bat = PackedFloat32Array(d.get("bat", []))
-	est = PackedFloat32Array(d.get("est", []))
-	morale = PackedFloat32Array(d.get("mor", []))
-	casualties = PackedFloat32Array(d.get("cas", []))
+	batt_size = SimUtil.parse_num(d.get("bs", 1000.0), 1000.0)
+	bat = SimUtil.dec_f32(d.get("bat", ""))
+	est = SimUtil.dec_f32(d.get("est", ""))
+	morale = SimUtil.dec_f32(d.get("mor", ""))
+	casualties = SimUtil.dec_f32(d.get("cas", ""))
 	for arr in [bat, est, morale, casualties]:
 		if arr.size() != _n:
 			arr.resize(_n)
@@ -74,7 +76,7 @@ func from_dict(d: Dictionary) -> void:
 		occupier.fill(-1)
 	siege = {}
 	for e in d.get("siege", []):
-		siege[int(e[0])] = {"by": int(e[1]), "prog": String(e[2]).to_float()}
+		siege[int(e[0])] = {"by": int(e[1]), "prog": SimUtil.parse_num(e[2])}
 	battles = int(d.get("battles", 0))
 	recent = []
 	for e: Dictionary in d.get("recent", []):
