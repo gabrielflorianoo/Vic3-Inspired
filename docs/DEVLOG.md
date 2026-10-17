@@ -124,3 +124,12 @@ Other checks I actually ran:
 - The info panel rebuilds its Control nodes on every selection. That's fine for clicks but should be pooled if selection becomes frequent.
 - `RenderingServer` video-memory figures under llvmpipe may not reflect a real driver.
 - The Windows build wasn't launched, and no icon or version resources were set (`application/modify_resources=false`, rcedit not configured).
+
+
+## Session: war model, explanations, lenses, performance
+- **Warfare** (`src/sim/military.gd`): battles are now persistent per attacked province (`live`), fought week by week. Each side commits a share of its army to every front it holds; strength = battalions x equipment x supply x organisation x tech x posture, defenders add terrain, fort and entrenchment (+4%/wk, max 30%). A battle ends when one side's organisation hits 0 (or after 10 weeks: stalemate); casualties and exhaustion scale with the weekly ratio. Postures (defensive/balanced/offensive, saved) trade strength, losses, arms use and upkeep. Reinforcement is slowed by arms shortages. `battle_report(c)` / `explain_battle(b)` feed the Military panel. AI sets postures weekly in `ai._set_postures`.
+- **Economy explanations** (`economy.gd`): `building_diagnosis`, `jobs_explanation`, `budget_explanation` use live arrays; shown in building profit tooltips, population and treasury tooltips. Also `can_build_fast`, `best_build_candidate`, `prioritize_build`, `shortage_goods`, `province_gdp`.
+- **Map lenses**: SoL, Pop, GDP, Unrest, War (battles/sieges/occupation/front); colours are written to the lookup texture only when data changes (monthly, weekly for War).
+- **Performance**: weekly settle iterates only active buildings, scratch buffers preallocated, pops buffers swapped not duplicated, x5 paced at 55 days/s with a 5 ms/frame budget, HUD updates throttled, overlay labels/markers batched.
+- Saves: `post`/`fl` keys are optional in the military dict; older saves load with balanced posture and no running battles.
+- Not yet measured on the target Q8300/R7 350; run `tools/sim_benchmark.gd` there. Ideas left: army movement visualisation, peace terms driven by occupied share, naval war.

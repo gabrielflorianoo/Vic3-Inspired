@@ -264,7 +264,7 @@ func _on_stepped(_days: int, week: bool, month: bool) -> void:
 		if state.military != null and state.military.occupier != _controllers:
 			_controllers = state.military.occupier.duplicate()
 			map_view.refresh_all()
-		elif month and map_view.mode >= 3:
+		elif map_view.mode >= 3 and (month or map_view.mode == 7):
 			map_view.refresh_all()
 
 
@@ -288,6 +288,21 @@ func _lens_color(p: int, m: int) -> Color:
 			var rad: float = state.pops.province_radical(p)
 			var t4 := clampf(rad / 0.38, 0.0, 1.0)
 			return Color(0.28, 0.62, 0.38).lerp(Color(0.92, 0.20, 0.18), t4)
+		7: # War: battles, sieges, occupations and the frontline
+			var mil = state.military
+			var o7: int = world.p_owner[p]
+			var ctl: int = mil.controller(p)
+			if mil.live.has(p):
+				return Color(0.95, 0.22, 0.12)
+			if mil.siege.has(p):
+				return Color(0.95, 0.6, 0.15)
+			if ctl != o7 and ctl >= 0:
+				return world.c_color[ctl]
+			for n in world.p_neighbors[p]:
+				var cn: int = mil.controller(int(n))
+				if cn != ctl and cn >= 0 and ctl >= 0 and state.diplo.at_war(ctl, cn):
+					return Color(0.85, 0.42, 0.3)
+			return world.c_color[o7].darkened(0.4)
 	return world.c_color[world.p_owner[p]]
 
 

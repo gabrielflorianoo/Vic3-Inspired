@@ -11,6 +11,12 @@ const PROF_COUNT := 7
 const UPKEEP_PER_MAN := 0.8   # money / week / man under arms
 const ARMS_PER_1000 := 4.0      # arms / week / 1000 men (x1.5 at war)
 const REINFORCE_RATE := 0.12    # battalions regained per week toward establishment
+const POST_NAMES := ["Defensive", "Balanced", "Offensive"]
+const POST_ATK := [0.8, 1.0, 1.25]     # combat power when attacking, by posture
+const POST_DEF := [1.25, 1.0, 0.85]    # combat power when defending
+const POST_TAKE := [0.75, 1.0, 1.25]   # org and casualties suffered
+const POST_COST := [0.9, 1.0, 1.2]     # arms use and upkeep while at war
+const MAX_BATTLE_WEEKS := 10
 
 var s
 var _n := 0
@@ -24,6 +30,9 @@ var casualties := PackedFloat32Array()  # lifetime battalions lost
 var battles := 0
 var recent: Array = []                  # [{day, text}] last 30 battle reports
 var _fill_cache := PackedFloat32Array()
+var posture := PackedByteArray()        # per country: 0 defensive, 1 balanced, 2 offensive
+var live: Dictionary = {}               # attacked province -> running battle {w, side, x, y, src, oa, od, wk, dig, ratio, f}
+var _load := PackedFloat32Array()       # per country: battles it is committed to this week
 
 
 func setup(state) -> void:
@@ -33,6 +42,9 @@ func setup(state) -> void:
 	occupier.resize(s.world.province_count)
 	occupier.fill(-1)
 	siege = {}; recent = []; battles = 0
+	posture.resize(_n); posture.fill(1)
+	live = {}
+	_load.resize(_n)
 	var tot := 0.0
 	for c in _n:
 		tot += _manpower_raw(c)
@@ -54,7 +66,8 @@ func to_dict() -> Dictionary:
 		sg.append([int(p), int(siege[p]["by"]), SimUtil.num_str(float(siege[p]["prog"]))])
 	return {"bs": SimUtil.num_str(batt_size), "bat": SimUtil.enc_f32(bat), "est": SimUtil.enc_f32(est),
 		"mor": SimUtil.enc_f32(morale), "occ": Array(occupier),
-		"siege": sg, "cas": SimUtil.enc_f32(casualties), "battles": battles, "recent": recent.duplicate(true)}
+		"siege": sg, "cas": SimUtil.enc_f32(casualties), "battles": battles, "recent": recent.duplicate(true),
+		"post": Array(posture), "fl": _live_to_array()}
 
 
 func from_dict(d: Dictionary) -> void:
@@ -81,6 +94,28 @@ func from_dict(d: Dictionary) -> void:
 	recent = []
 	for e: Dictionary in d.get("recent", []):
 		recent.append({"day": int(e["day"]), "text": String(e["text"])})
+	posture = PackedByteArray()
+	posture.resize(_n)
+	posture.fill(1)
+	var pa_arr: Array = d.get("post", [])
+	if pa_arr.size() == _n:
+		for i in _n:
+			posture[i] = clampi(int(pa_arr[i]), 0, 2)
+	live = {}
+	for e in d.get("fl", []):
+		live[int(e[0])] = {"w": int(e[1]), "side": int(e[2]), "x": int(e[3]), "y": int(e[4]), "src": int(e[5]),
+			"oa": SimUtil.parse_num(e[6]), "od": SimUtil.parse_num(e[7]), "wk": int(e[8]), "dig": SimUtil.parse_num(e[9]),
+			"ratio": SimUtil.parse_num(e[10]), "f": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}
+	_load.resize(_n)
+
+
+func _live_to_array() -> Array:
+	var out := []
+	for q: int in live.keys():
+		var b: Dictionary = live[q]
+		out.append([q, int(b["w"]), int(b["side"]), int(b["x"]), int(b["y"]), int(b["src"]), SimUtil.num_str(float(b["oa"])),
+			SimUtil.num_str(float(b["od"])), int(b["wk"]), SimUtil.num_str(float(b["dig"])), SimUtil.num_str(float(b["ratio"]))])
+	return out
 
 
 # --------------------------------------------------------------------------- helpers
@@ -141,11 +176,11 @@ func equipment_fill(c: int) -> float:
 
 
 func upkeep(c: int) -> float:
-	return bat[c] * batt_size * UPKEEP_PER_MAN * (1.25 if at_war(c) else 1.0)
+	return bat[c] * batt_size * UPKEEP_PER_MAN * (1.25 * float(POST_COST[posture[c]]) if at_war(c) else 1.0)
 
 
 func arms_demand(c: int) -> float:
-	return bat[c] * batt_size / 1000.0 * ARMS_PER_1000 * (1.5 if at_war(c) else 1.0)
+	return bat[c] * batt_size / 1000.0 * ARMS_PER_1000 * (1.5 * float(POST_COST[posture[c]]) if at_war(c) else 1.0)
 
 
 func power_breakdown(c: int) -> Array:
@@ -240,6 +275,7 @@ func on_transfer(p: int, _from: int, _to: int) -> void:
 	if p > 0 and p < occupier.size():
 		occupier[p] = -1
 		siege.erase(p)
+		live.erase(p)
 
 
 func on_war_ended(_w: Dictionary) -> void:
@@ -270,6 +306,7 @@ func tick_week() -> void:
 	for w: Dictionary in wars:
 		for x in w["attackers"]: at_w[x] = 1
 		for x in w["defenders"]: at_w[x] = 1
+	_drop_dead_battles()
 	for c in _n:
 		if not s.alive[c]:
 			continue
@@ -278,9 +315,20 @@ func tick_week() -> void:
 		var maxb := float(max_battalions(c))
 		est[c] = minf(est[c], maxb) if est[c] > maxb + 1.0 else est[c]
 		if bat[c] < est[c]:
-			bat[c] = minf(est[c], bat[c] + REINFORCE_RATE)
+			# Replacements need rifles and artillery: an arms shortage slows reinforcement.
+			bat[c] = minf(est[c], bat[c] + REINFORCE_RATE * (0.35 + 0.65 * equipment_fill(c)))
+	if wars.is_empty():
+		return
 	for w: Dictionary in wars.duplicate():
-		_fight(w)
+		_start_battles(w)
+	_load.resize(_n)
+	_load.fill(0.0)
+	for bt: Dictionary in live.values():
+		_load[int(bt["x"])] += 1.0
+		_load[int(bt["y"])] += 1.0
+	for q: int in live.keys():
+		if live.has(q):
+			_round(q)
 
 
 func _terrain_def(p: int) -> float:
@@ -358,83 +406,172 @@ func _targets(w: Dictionary, side: int) -> Array:
 	return out
 
 
-func _fight(w: Dictionary) -> void:
-	var p_att := _side_power(w, 1)
-	var p_def := _side_power(w, -1)
+func set_posture(c: int, p: int) -> bool:
+	posture[c] = clampi(p, 0, 2)
+	return true
+
+
+func get_posture(c: int) -> int:
+	return posture[c]
+
+
+func _drop_dead_battles() -> void:
+	for q: int in live.keys():
+		var b: Dictionary = live[q]
+		var x: int = b["x"]
+		var y: int = b["y"]
+		if not s.alive[x] or not s.alive[y] or not s.diplo.at_war(x, y) or controller(q) != y:
+			live.erase(q)
+
+
+func _max_fronts(members: Array) -> int:
+	var tot := 0.0
+	for x in members:
+		tot += bat[x]
+	return clampi(1 + int(tot / 8.0), 1, 3)
+
+
+## Opens new battles along the real province frontier. Defensive nations only counter-attack to liberate
+## their own land; offensive ones always press; balanced ones attack most weeks.
+func _start_battles(w: Dictionary) -> void:
 	for side in [1, -1]:
-		var targets := _targets(w, side)
-		if targets.is_empty():
+		var mine: Array = w["attackers"] if side == 1 else w["defenders"]
+		var cap := _max_fronts(mine)
+		var cur := 0
+		for bt: Dictionary in live.values():
+			if int(bt["w"]) == int(w["id"]) and int(bt["side"]) == side:
+				cur += 1
+		if cur >= cap:
 			continue
-		var mine_p: float = p_att if side == 1 else p_def
-		var their_p: float = p_def if side == 1 else p_att
-		var ops := mini(2, targets.size())
-		if mine_p < 3.0:
-			ops = 1
-		for k in ops:
-			if s.rng.randf() > 0.75:
+		for t in _targets(w, side):
+			if cur >= cap:
+				break
+			var q: int = t[1]
+			var src: int = t[2]
+			var x := controller(src)
+			var y := controller(q)
+			if live.has(q) or x < 0 or y < 0 or bat[x] < 0.5 or not mine.has(x):
 				continue
-			var q: int = targets[k][1]
-			var src: int = targets[k][2]
-			_battle(w, side, q, src, mine_p, their_p)
+			var pst: int = posture[x]
+			var want: bool = float(t[0]) >= 60.0 or pst == 2 or (pst == 1 and s.rng.randf() < 0.6)
+			if not want:
+				continue
+			live[q] = {"w": int(w["id"]), "side": side, "x": x, "y": y, "src": src, "oa": morale[x], "od": morale[y],
+				"wk": 0, "dig": 0.0, "ratio": 1.0, "f": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}
+			cur += 1
+			_report("%s attacks %s (%s)." % [s.world.c_short[x], s.world.p_name[q], s.world.c_short[y]], x, y)
 
 
-func _battle(w: Dictionary, side: int, q: int, src: int, mine_p: float, their_p: float) -> void:
-	var x := controller(src)                 # attacking country
-	var y := controller(q)                   # defending country (holder of q)
-	if y < 0 or x < 0:
+## One week of a running battle. Forces are the share of each army committed to this front, scaled by
+## equipment, supply, organisation, terrain, entrenchment and posture; the battle ends when one side's
+## organisation collapses, so a smaller well-equipped force on good ground can still win.
+func _round(q: int) -> void:
+	var b: Dictionary = live[q]
+	var x: int = b["x"]
+	var y: int = b["y"]
+	var w: Dictionary = s.diplo.war_by_id(int(b["w"]))
+	if w.is_empty():
+		live.erase(q)
 		return
-	# Supply: deep inside enemy land is harder; railways help both.
-	var sup_a := 1.0
-	var touches_own := false
-	for n in s.world.p_neighbors[q]:
-		if s.world.p_owner[n] == x:
-			touches_own = true
-			break
-	if not touches_own and s.world.p_owner[q] != x:
-		sup_a -= 0.12
-	sup_a += 0.04 * minf(3, _railway_level(src))
-	var sup_d := 1.0 + 0.04 * minf(3, _railway_level(q))
+	var src: int = b["src"]
+	var wk: int = b["wk"]
+	var ca := maxf(0.2, bat[x] * 0.8 / maxf(1.0, _load[x]))
+	var cd := maxf(0.2, bat[y] * 0.8 / maxf(1.0, _load[y]))
+	var ex := 0.4 + 0.6 * equipment_fill(x)
+	var ey := 0.4 + 0.6 * equipment_fill(y)
+	var deep: bool = s.world.p_owner[q] != x
+	if deep:
+		for n in s.world.p_neighbors[q]:
+			if s.world.p_owner[n] == x:
+				deep = false
+				break
+	var sup_a := clampf((0.88 if deep else 1.0) + 0.04 * minf(3.0, float(_railway_level(src))) - 0.012 * wk, 0.5, 1.2)
+	var sup_d := 1.0 + 0.04 * minf(3.0, float(_railway_level(q)))
+	var terr := _terrain_def(q)
 	var fort := 1.15 if s.world.p_capital[q] == 1 else 1.0
-	var ratio := (mine_p * sup_a) / maxf(0.01, their_p * _terrain_def(q) * fort * sup_d)
-	ratio *= lerpf(0.78, 1.28, s.rng.randf())
+	var dig: float = b["dig"]
+	var oa: float = b["oa"]
+	var od: float = b["od"]
+	var pa := ca * ex * sup_a * oa * (1.0 + _tech_mod(x, "army_power")) * float(POST_ATK[posture[x]])
+	var pd := cd * ey * sup_d * od * (1.0 + _tech_mod(y, "army_power")) * float(POST_DEF[posture[y]]) * terr * fort * (1.0 + dig)
+	var ratio := pa / maxf(pd, 0.01) * lerpf(0.88, 1.15, s.rng.randf())
+	var rc := clampf(ratio, 0.25, 4.0)
+	var tk_x: float = POST_TAKE[posture[x]]
+	var tk_y: float = POST_TAKE[posture[y]]
+	oa = maxf(0.0, oa - 0.16 / rc * tk_x)
+	od = maxf(0.0, od - 0.16 * rc * tk_y)
+	_take_casualties(x, ca * 0.035 / rc * tk_x)
+	_take_casualties(y, cd * 0.035 * rc * tk_y)
+	s.diplo.add_exhaustion(x, 0.06 + 0.08 / rc)
+	s.diplo.add_exhaustion(y, 0.06 + 0.08 * minf(rc, 3.0) / 3.0)
+	b["oa"] = oa
+	b["od"] = od
+	b["wk"] = wk + 1
+	b["dig"] = minf(0.3, dig + 0.04)
+	b["ratio"] = ratio
+	b["f"] = [ca, cd, ex, ey, sup_a, sup_d, terr]
+	if od <= 0.0:
+		_end_battle(q, b, w, true, ratio)
+	elif oa <= 0.0:
+		_end_battle(q, b, w, false, ratio)
+	elif wk + 1 >= MAX_BATTLE_WEEKS:
+		live.erase(q)
+		_report("The fighting at %s ends in stalemate." % s.world.p_name[q], x, y)
+
+
+func _end_battle(q: int, b: Dictionary, w: Dictionary, win: bool, ratio: float) -> void:
+	live.erase(q)
+	var x: int = b["x"]
+	var y: int = b["y"]
+	var side: int = b["side"]
 	battles += 1
-	var win := ratio > 1.0
-	# Casualties (battalions)
-	var lose_x := maxf(0.15, bat[x] * 0.02) * (0.8 if win else 1.5)
-	var lose_y := maxf(0.15, bat[y] * 0.02) * (1.5 if win else 0.8)
-	_take_casualties(x, lose_x)
-	_take_casualties(y, lose_y)
-	morale[x] = clampf(morale[x] + (0.02 if win else -0.06), 0.2, 1.0)
-	morale[y] = clampf(morale[y] + (-0.06 if win else 0.02), 0.2, 1.0)
-	var loser: int = y if win else x
-	var winner: int = x if win else y
-	s.diplo.add_exhaustion(loser, 0.5)
-	s.diplo.add_exhaustion(winner, 0.1)
+	morale[x] = clampf(morale[x] + (0.03 if win else -0.08), 0.2, 1.0)
+	morale[y] = clampf(morale[y] + (-0.08 if win else 0.03), 0.2, 1.0)
+	s.diplo.add_exhaustion(y if win else x, 0.4)
 	s.diplo.add_battle_score(w["id"], side if win else -side, 1.5)
 	var verb := "storms" if win else "is repulsed at"
-	_report("%s %s %s (%s)." % [s.world.c_short[x], verb, s.world.p_name[q], s.world.c_short[y]], x, y)
+	_report("%s %s %s (%s) after %d weeks." % [s.world.c_short[x], verb, s.world.p_name[q], s.world.c_short[y], int(b["wk"])], x, y)
 	if not win:
 		return
-	# Siege progress -> occupation or liberation.
-	var need := 2.5 + 0.3 * float(s.world.p_tier[q]) + (0.8 if s.world.p_capital[q] == 1 else 0.0)
+	# A won battle advances the siege; enough progress turns into occupation or liberation.
+	var need := 1.2 + 0.25 * float(s.world.p_tier[q]) + (0.6 if s.world.p_capital[q] == 1 else 0.0)
 	var st: Dictionary = siege.get(q, {"by": x, "prog": 0.0})
 	if st["by"] != x:
 		st = {"by": x, "prog": 0.0}
-	st["prog"] = float(st["prog"]) + clampf(ratio - 0.8, 0.25, 1.0)
+	st["prog"] = float(st["prog"]) + 1.0 + 0.5 * clampf(ratio - 1.0, 0.0, 1.0)
 	if st["prog"] < need:
 		siege[q] = st
 		return
 	siege.erase(q)
 	var ow: int = s.world.p_owner[q]
-	var old_ctl := y
 	if ow == x or w["attackers" if side == 1 else "defenders"].has(ow):
 		occupier[q] = -1
 		_report("%s liberates %s." % [s.world.c_short[x], s.world.p_name[q]], x, ow, true)
 	else:
 		occupier[q] = x
 		_report("%s occupies %s from %s." % [s.world.c_short[x], s.world.p_name[q], s.world.c_short[ow]], x, ow, true)
-	if old_ctl != x and old_ctl != ow:
-		pass
+
+
+## Active battles involving country c, with a plain-language reason for the way each is going.
+func battle_report(c: int) -> Array:
+	var out: Array = []
+	for q: int in live.keys():
+		var b: Dictionary = live[q]
+		if int(b["x"]) == c or int(b["y"]) == c:
+			out.append({"province": q, "attacker": int(b["x"]), "defender": int(b["y"]), "org_a": float(b["oa"]),
+				"org_d": float(b["od"]), "weeks": int(b["wk"]), "text": explain_battle(b)})
+	return out
+
+
+func explain_battle(b: Dictionary) -> String:
+	var f: Array = b["f"]
+	var x: int = b["x"]
+	var y: int = b["y"]
+	var r: float = b["ratio"]
+	var head := "Attacker advancing" if r > 1.15 else ("Defenders holding" if r < 0.87 else "Deadlock")
+	return "%s. %s (%s): %.1f bn, gear %d%%, supply %d%%. %s (%s): %.1f bn, gear %d%%, supply %d%%, terrain x%.2f, entrenchment +%d%%." % [
+		head, s.world.c_short[x], POST_NAMES[posture[x]], f[0], int(float(f[2]) * 100.0), int(float(f[4]) * 100.0),
+		s.world.c_short[y], POST_NAMES[posture[y]], f[1], int(float(f[3]) * 100.0), int(float(f[5]) * 100.0), f[6], int(float(b["dig"]) * 100.0)]
 
 
 func _report(text: String, a: int, b: int, major: bool = false) -> void:
@@ -463,8 +600,12 @@ func _take_casualties(c: int, battalions_lost: float) -> void:
 		var p: int = provs[s.rng.randi() % provs.size()]
 		var idx := p * PROF_COUNT + PROF_SOLDIER
 		if idx < arr.size() and float(arr[idx]) > men:
+			var new_sz: float = float(arr[idx]) - men
 			if arr is PackedInt32Array:
-				arr[idx] = int(float(arr[idx]) - men)
+				arr[idx] = int(new_sz)
 			else:
-				arr[idx] = float(arr[idx]) - men
+				arr[idx] = new_sz
+			var emp_arr = s.pops.get("employed")
+			if emp_arr != null and idx < emp_arr.size() and float(emp_arr[idx]) > float(arr[idx]):
+				emp_arr[idx] = arr[idx]
 			return

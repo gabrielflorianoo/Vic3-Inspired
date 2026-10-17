@@ -3,7 +3,7 @@ extends Sprite2D
 ## Per-province visual state is pushed into a (N x 2) lookup texture only when
 ## selection, hover or ownership changes — never per frame.
 
-enum Mode { POLITICAL, TERRAIN, PROVINCES, SOL, POPULATION, GDP, RADICALS }
+enum Mode { POLITICAL, TERRAIN, PROVINCES, SOL, POPULATION, GDP, RADICALS, WAR }
 
 var world: RefCounted
 var mode: int = Mode.POLITICAL

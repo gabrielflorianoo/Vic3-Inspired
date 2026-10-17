@@ -138,12 +138,15 @@ func tick_month() -> void:
 				var sl := sol[i]
 				# growth
 				var r_year := clampf(GROWTH_PER_SOL * (sl - SOL_NEUTRAL), -0.02, 0.03)
-				size[i] = sz + sz * (r_year / 12.0)
+				sz = maxf(0.0, sz + sz * (r_year / 12.0))
+				size[i] = sz
+				if employed[i] > sz:
+					employed[i] = sz
 				# literacy
 				literacy[i] = minf(0.99, literacy[i] + lit_gain * (1.0 - literacy[i]))
 				# radicalism: poverty, joblessness, unaccepted culture, falling living standards
 				var unemp := 0.0
-				if prof < ARISTOCRAT:
+				if prof < ARISTOCRAT and sz > 0.0:
 					unemp = maxf(0.0, 1.0 - employed[i] / sz)
 				var t := 0.10 + clampf((10.0 - sl) / 10.0, -0.5, 1.0) * 0.30
 				t += unemp * 0.5 + mino * 0.22

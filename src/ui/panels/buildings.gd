@@ -55,7 +55,7 @@ func rebuild() -> void:
 				g.add_child(K.lbl("%s / %s" % [K.num(emp), K.num(need)], 13, K.WARN if emp < need else K.INK,
 					"Employed workers versus positions. Unfilled jobs reduce output."))
 				var pf: float = float(b.get("profit", 0.0))
-				g.add_child(K.lbl(K.signed_money(pf), 13, K.sign_color(pf)))
+				g.add_child(K.lbl(K.signed_money(pf), 13, K.sign_color(pf), econ.building_diagnosis(p, bt_id)))
 				var can_exp: bool = econ.can_build_fast(c, p, bt_id)
 				g.add_child(K.btn("+ Expand", "Queue another level in %s" % world.p_name[p],
 					func(): act(econ.queue_build(c, p, bt_id), "%s queued in %s." % [econ.building_name(bt_id), world.p_name[p]]), can_exp))

@@ -2057,3 +2057,100 @@ func from_dict(d: Dictionary) -> void:
 			lst.append({"province": pr[k], "type": ty[k], "progress": pg[k], "cost": co[k]})
 		queues[c] = lst
 	_build_qpc()
+
+
+# =========================================================================== explanations (generated from live simulation values)
+func _fmt(v: float) -> String:
+	if absf(v) >= 1.0e6:
+		return "%.1fM" % (v / 1.0e6)
+	if absf(v) >= 1000.0:
+		return "%.0fk" % (v / 1000.0)
+	return "%.0f" % v
+
+
+## Why a building is not producing or earning what its size suggests.
+func building_diagnosis(p: int, t: int) -> String:
+	var i := p * B + t
+	if lvl[i] <= 0:
+		return "Not built here."
+	var c: int = world.p_owner[p]
+	if c < 0:
+		return ""
+	var cg := c * G
+	var parts := PackedStringArray()
+	if _ctl[p] != c:
+		parts.append("province occupied: output is only %d%%" % int(OCCUPIED_OUTPUT * 100.0))
+	if staff[i] < 0.95:
+		var lack := ""
+		for k in LABOR_PROFS:
+			if b_work[t * PC + k] > 0.0 and vacant[p * PC + k] > 0.5:
+				lack = PROF_KEYS[k]
+				break
+		parts.append("only %d%% of jobs filled%s" % [int(staff[i] * 100.0), (" (no spare %ss)" % lack) if lack != "" else ""])
+	if bio[i] < 0.95:
+		var lim := -1
+		var lf := 1.0
+		for g: int in b_in_g[t]:
+			if fill[cg + g] < lf:
+				lf = fill[cg + g]
+				lim = g
+		if lim >= 0:
+			parts.append("%s shortage: inputs only %d%% supplied" % [good_names[lim].to_lower(), int(lf * 100.0)])
+	if b_state[t] == 0:
+		var go := b_out_g[t]
+		if go >= 0 and sold[cg + go] < 0.95:
+			parts.append("only %d%% of its %s is bought (oversupplied market)" % [int(sold[cg + go] * 100.0), good_names[go].to_lower()])
+		if go >= 0 and mp[cg + go] < good_base[go] * 0.8:
+			parts.append("%s sells at %d%% of its base price" % [good_names[go].to_lower(), int(mp[cg + go] / good_base[go] * 100.0)])
+		if b_primary[t] == 1 and tp[i] < 0.8:
+			parts.append("poor terrain yield (%d%%)" % int(tp[i] * 100.0))
+		if profit[i] < 0.0 and parts.is_empty():
+			parts.append("wages and input costs exceed revenue at current prices")
+	if parts.is_empty():
+		return "Running at full capacity."
+	return "Below capacity: " + "; ".join(parts) + "."
+
+
+## Why unemployment is what it is: missing jobs, or jobs nobody can fill.
+func jobs_explanation(c: int) -> String:
+	var un := 0.0
+	var vac := 0.0
+	var worst := 0
+	var wv := 0.0
+	var by_prof := PackedFloat64Array()
+	by_prof.resize(LABOR_PROFS)
+	for p: int in world.c_provinces[c]:
+		for k in LABOR_PROFS:
+			var u: float = float(pops.size[p * PC + k]) - float(pops.employed[p * PC + k])
+			if u > 0.0:
+				un += u
+				by_prof[k] += u
+			vac += vacant[p * PC + k]
+	for k in LABOR_PROFS:
+		if by_prof[k] > wv:
+			wv = by_prof[k]
+			worst = k
+	var rate: float = pops.unemployment(c)
+	if rate < 0.04:
+		return "Jobs: healthy, %d%% unemployed." % int(rate * 100.0)
+	if vac > un * 0.5:
+		return "Jobs: %s jobless (%d%%) while %s positions sit vacant: the wrong professions or the wrong provinces. Build where the %ss are idle." % [_fmt(un), int(rate * 100.0), _fmt(vac), PROF_KEYS[worst]]
+	return "Jobs: %s jobless (%d%%, mostly %ss) and few vacancies: too few buildings. Invest in farms, mines or factories where they live." % [_fmt(un), int(rate * 100.0), PROF_KEYS[worst]]
+
+
+## Why the treasury is gaining or losing money, ranked by the biggest spending items.
+func budget_explanation(c: int) -> String:
+	var inc := bud_tax[c] + bud_tariff[c]
+	var bal := inc - bud_admin[c] - bud_mil[c] - bud_con[c] - bud_int[c]
+	var items := [["administration", bud_admin[c]], ["the military", bud_mil[c]], ["construction", bud_con[c]], ["debt interest", bud_int[c]]]
+	items.sort_custom(func(a, b): return a[1] > b[1])
+	var txt := ""
+	if bal >= 0.0:
+		txt = "Surplus %s/wk: income %s exceeds spending; the largest cost is %s (%s)." % [_fmt(bal), _fmt(inc), items[0][0], _fmt(items[0][1])]
+	else:
+		txt = "Deficit %s/wk: spending exceeds income %s, mainly %s (%s) and %s (%s)." % [_fmt(-bal), _fmt(inc), items[0][0], _fmt(items[0][1]), items[1][0], _fmt(items[1][1])]
+	if inc > 0.0 and bud_mil[c] > inc * 0.35:
+		txt += " The army takes %d%% of income." % int(bud_mil[c] / inc * 100.0)
+	if tre[c] < 0.0:
+		txt += " The state is in debt: interest accrues, legitimacy suffers and construction stalls if it deepens."
+	return txt

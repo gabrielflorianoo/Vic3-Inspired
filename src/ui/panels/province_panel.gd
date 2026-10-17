@@ -116,7 +116,7 @@ func refresh() -> void:
 		var row := K.hbox(6)
 		row.add_child(K.lbl("%s  lv %d%s/%d" % [str(b.get("name", "?")), int(b.get("level", 1)), q_str, int(econ.cap[p * econ.B + bt_id])], 12))
 		row.add_child(K.spacer())
-		row.add_child(K.lbl(K.signed_money(pf), 11, K.sign_color(pf), "Weekly profit"))
+		row.add_child(K.lbl(K.signed_money(pf), 11, K.sign_color(pf), "Weekly profit\n" + econ.building_diagnosis(p, bt_id)))
 		if o == me:
 			var can_exp: bool = econ.can_build_fast(me, p, bt_id)
 			var eb := K.btn("+", "Expand %s in %s" % [econ.building_name(bt_id), world.p_name[p]], func():

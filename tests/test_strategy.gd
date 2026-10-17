@@ -39,7 +39,7 @@ func _init() -> void:
 		if a.begins_with("--years="):
 			_years = int(a.substr(8))
 	print("mode: ", "REAL GameState" if _real else "fake state (no economy)")
-	for t in [test_static_api, test_scripted_war, test_politics_actions, test_long_run, test_determinism_and_save]:
+	for t in [test_static_api, test_scripted_war, test_battles, test_politics_actions, test_long_run, test_determinism_and_save]:
 		var before := _fail
 		var ms := Time.get_ticks_msec()
 		t.call()
@@ -217,6 +217,70 @@ func test_scripted_war() -> void:
 			_run_days(st, 40)
 			var o: Dictionary = st.diplo.offer_peace(wid, a, "white_peace")
 			check(o.has("ok") and o.has("reason"), "offer_peace returns ok/reason")
+	st.dispose()
+
+
+func test_battles() -> void:
+	var st = _new(13, 5)
+	var pair := _find_pair(st)
+	if pair.is_empty():
+		st.dispose()
+		return
+	var a: int = pair[0]
+	var b: int = pair[1]
+	var targets := PackedInt32Array([pair[2][0], pair[2][1]])
+	st.diplo.claims[a].append(targets[0]); st.diplo.claims[a].append(targets[1])
+	st.diplo.truces.clear(); st.diplo.wars.clear()
+	var r: Dictionary = st.diplo.declare_war(a, b, targets)
+	check(r["ok"], "declare_war for battle test: %s" % r["reason"])
+	var m = st.military
+	m.bat[a] = 10.0; m.est[a] = 10.0; m.bat[b] = 10.0; m.est[b] = 10.0
+	m.set_posture(a, 0); var d0: float = m.arms_demand(a)
+	m.set_posture(a, 1); var d1: float = m.arms_demand(a)
+	m.set_posture(a, 2); var d2: float = m.arms_demand(a)
+	check(d0 < d1 and d1 < d2, "posture changes arms demand while at war")
+	var seen := false
+	var saved := {}
+	for wk in 14:
+		_run_days(st, 7)
+		for q: int in m.live.keys():
+			var bt: Dictionary = m.live[q]
+			seen = true
+			check(float(bt["oa"]) >= 0.0 and float(bt["oa"]) <= 1.0 and float(bt["od"]) >= 0.0 and float(bt["od"]) <= 1.0, "organisation stays within 0..1")
+			check(m.controller(q) == int(bt["y"]), "battle is fought for a province held by the defender")
+			check(_world.p_neighbors[q].has(int(bt["src"])), "front derives from real province adjacency")
+		if saved.is_empty() and not m.live.is_empty():
+			saved = m.to_dict()
+		for c in [a, b]:
+			check(m.bat[c] >= 0.0 and m.morale[c] >= 0.2 and m.morale[c] <= 1.0, "army state stays in range")
+		if st.diplo.wars.is_empty():
+			break
+	check(seen or m.battles > 0, "battles were fought over the weeks")
+	if not saved.is_empty():
+		var m2 = load("res://src/sim/military.gd").new()
+		m2.setup(st)
+		m2.from_dict(saved)
+		var rt: Dictionary = m2.to_dict()
+		check(rt["fl"] == saved["fl"] and rt["post"] == saved["post"], "running battles and posture survive save/load")
+		var legacy := saved.duplicate()
+		legacy.erase("fl"); legacy.erase("post")
+		m2.from_dict(legacy)
+		check(m2.live.is_empty() and m2.get_posture(a) == 1, "saves without battles load with safe defaults")
+	if _real:
+		var ge: int = st.econ.G
+		var ga: int = st.econ.g_arms
+		var keep: float = st.econ.fill[a * ge + ga]
+		st.econ.fill[a * ge + ga] = 0.0
+		var low: float = m.power(a)
+		st.econ.fill[a * ge + ga] = 1.0
+		check(m.power(a) > low, "an arms shortage lowers army power")
+		st.econ.fill[a * ge + ga] = keep
+		check(st.econ.budget_explanation(a) != "" and st.econ.jobs_explanation(a) != "", "budget and jobs explanations are produced")
+		for p: int in _world.c_provinces[a]:
+			var bl: Array = st.econ.buildings_in(p)
+			if not bl.is_empty():
+				check(st.econ.building_diagnosis(p, int(bl[0]["type"])) != "", "building diagnosis is produced")
+				break
 	st.dispose()
 
 

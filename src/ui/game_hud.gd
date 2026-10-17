@@ -156,7 +156,7 @@ func _build_tabs() -> void:
 		b.add_theme_stylebox_override("normal", K.style(Color(0.12, 0.105, 0.085, 0.94), Color(0.42, 0.35, 0.22), 1, 2, 5))
 		_tab_btns[t[0]] = b
 		_tabs_row.add_child(b)
-	var modes := ["Political", "Terrain", "Provinces", "SoL", "Pop", "GDP", "Unrest"]
+	var modes := ["Political", "Terrain", "Provinces", "SoL", "Pop", "GDP", "Unrest", "War"]
 	var tips := [
 		"Political map (F5)",
 		"Terrain & biomes (F6)",
@@ -164,7 +164,8 @@ func _build_tabs() -> void:
 		"Standard of Living heatmap (red = poor, green = prosperous)",
 		"Population density heatmap",
 		"Province GDP / industrial output heatmap",
-		"Radicals & unrest heatmap (green = calm, red = turbulent)"
+		"Radicals & unrest heatmap (green = calm, red = turbulent)",
+		"War map: battles (red), sieges (orange), occupations and frontline provinces"
 	]
 	var grp := ButtonGroup.new()
 	var mrow := K.hbox(3)
@@ -284,7 +285,7 @@ func mouse_over_ui(pos: Vector2) -> bool:
 		return true
 	if _province_panel.visible and _province_panel.get_global_rect().has_point(pos):
 		return true
-	return pos.x > size.x - 420 and pos.y < TABS_Y + 28
+	return pos.x > size.x - 470 and pos.y < TABS_Y + 28
 
 
 # --------------------------------------------------------------- top bar
@@ -333,8 +334,9 @@ func update_bar(full: bool) -> void:
 	_bar_treasury.tooltip_text = "Treasury %s\nWeekly: taxes %s, tariffs %s, admin -%s, military -%s, construction -%s, interest -%s\nBalance %s" % [
 		K.money(tr), K.num(float(bud.get("tax", 0.0))), K.num(float(bud.get("tariffs", 0.0))), K.num(absf(float(bud.get("admin", 0.0)))),
 		K.num(absf(float(bud.get("military", 0.0)))), K.num(absf(float(bud.get("construction", 0.0)))), K.num(absf(float(bud.get("interest", 0.0)))), K.signed_money(bal)]
+	_bar_treasury.tooltip_text += "\n\n" + econ.budget_explanation(c)
 	_bar_pop.text = "Pop " + K.num(state.pops.country_pop(c))
-	_bar_pop.tooltip_text = "Total population"
+	_bar_pop.tooltip_text = "Total population\n" + econ.jobs_explanation(c)
 	_bar_gdp.text = "GDP " + K.money(econ.gdp(c))
 	_bar_gdp.tooltip_text = "Gross domestic product (annual value added)"
 	var leg: float = state.politics.legitimacy(c)

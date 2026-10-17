@@ -174,7 +174,12 @@ func _building_score(c: int, t: int) -> float:
 	for j in ig.size():
 		if econ.ms[cg + ig[j]] < iq[j] * 0.5:
 			return -1.0
-	return float(econ.level_profit(c, t)) / maxf(1.0, econ.b_cost[t]) * 100.0
+	var score: float = float(econ.level_profit(c, t)) / maxf(1.0, econ.b_cost[t]) * 100.0
+	# A good the market is short of is worth more than its current price suggests.
+	var go: int = econ.b_out_g[t]
+	if go >= 0 and econ.md[cg + go] > 0.5 and econ.fill[cg + go] < 0.8:
+		score *= 1.5
+	return score
 
 
 func _construction(c: int) -> void:
@@ -386,11 +391,37 @@ func _military(c: int) -> void:
 		m.disband(c, 1)
 
 
+# --------------------------------------------------------------------------- army posture
+## Attack when clearly stronger and well equipped; dig in when outmatched, short of arms or in debt.
+func _set_postures() -> void:
+	if s.military == null:
+		return
+	for w: Dictionary in s.diplo.wars:
+		for side in [1, -1]:
+			var mine: Array = w["attackers"] if side == 1 else w["defenders"]
+			var foes: Array = w["defenders"] if side == 1 else w["attackers"]
+			var theirs := 0.0
+			for f in foes:
+				theirs += _power(f)
+			for c: int in mine:
+				if s.is_player(c) or (week_counter + c) % 3 != 0:
+					continue
+				var r := _power(c) / maxf(0.5, theirs)
+				var fill: float = s.military.equipment_fill(c)
+				var pst := 1
+				if _debt(c) or fill < 0.5 or r < 0.7:
+					pst = 0
+				elif r > 1.4 and fill >= 0.7:
+					pst = 2
+				s.military.set_posture(c, pst)
+
+
 # --------------------------------------------------------------------------- war reactions (called weekly by diplomacy)
 func react_wars() -> void:
 	week_counter += 1
 	if s.diplo == null:
 		return
+	_set_postures()
 	for w: Dictionary in s.diplo.wars.duplicate():
 		if s.day - int(w["start_day"]) < 60:
 			continue

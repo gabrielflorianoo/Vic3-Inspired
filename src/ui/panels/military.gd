@@ -29,6 +29,15 @@ func rebuild() -> void:
 	var eqtip := "Arms supply versus military demand: %s" % K.pct(state.econ.equipment_fill(c))
 	add_child(K.lbl(eqtip, 11, K.DIM))
 
+	add_child(K.section("Posture (battles, arms use, upkeep)"))
+	var pbox := K.hbox(6)
+	var ptips := ["Defensive: +25% strength defending, -20% attacking, 25% lighter losses, only counter-attacks to retake land, 10% cheaper.",
+		"Balanced: no modifiers.",
+		"Offensive: +25% strength attacking, -15% defending, 25% heavier losses, always presses the front, 20% costlier arms and upkeep."]
+	for i in 3:
+		pbox.add_child(K.btn(mil.POST_NAMES[i], ptips[i], func(): act(mil.set_posture(c, i), "Army posture: %s." % mil.POST_NAMES[i]), mil.get_posture(c) != i))
+	add_child(pbox)
+
 	add_child(K.section("Recruit / disband"))
 	var rr := K.hbox(6)
 	for n in [1, 5, 10]:
@@ -41,6 +50,19 @@ func rebuild() -> void:
 
 	add_child(K.section("Wars"))
 	war_rows(self)
+	add_child(K.section("Battles and fronts"))
+	var live_b: Array = mil.battle_report(c)
+	if live_b.is_empty():
+		add_child(K.lbl("No battles are being fought.", 12, K.DIM))
+	for e: Dictionary in live_b:
+		var mine_att: bool = int(e["attacker"]) == c
+		var brow := K.hbox(8)
+		brow.add_child(K.lbl("%s %s" % [world.p_name[int(e["province"])], "(attacking)" if mine_att else "(defending)"], 13, K.GOLD))
+		brow.add_child(K.spacer())
+		brow.add_child(K.bar(float(e["org_a"] if mine_att else e["org_d"]), K.GOOD, 70.0, 8.0, "Your organisation"))
+		brow.add_child(K.bar(float(e["org_d"] if mine_att else e["org_a"]), K.BAD, 70.0, 8.0, "Enemy organisation"))
+		add_child(brow)
+		add_child(_wrapped(str(e["text"]), K.DIM))
 	var held: Array = mil.occupied_by(c)
 	if not held.is_empty():
 		add_child(_wrapped("Provinces you occupy: " + _names(held), K.GOOD))
