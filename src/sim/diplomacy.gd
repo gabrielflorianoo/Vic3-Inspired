@@ -275,6 +275,17 @@ func trade_partners(c: int) -> Array:
 	return out
 
 
+func trade_partners_packed(c: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for k in trade:
+		var a: int = int(k) / 1000
+		var b: int = int(k) % 1000
+		if a == c: out.append(b)
+		elif b == c: out.append(a)
+	out.sort()
+	return out
+
+
 func rivals(c: int) -> Array:
 	return Array(rival_list[c])
 
@@ -297,8 +308,12 @@ func truce_days_left(a: int, b: int) -> int:
 
 # --------------------------------------------------------------------------- relations
 func _gov_step(c: int) -> int:
-	if s.politics != null and s.politics.has_method("law") and s.politics.laws.size() == _n:
-		return ["autocracy", "oligarchy", "census_suffrage", "universal_suffrage"].find(s.politics.law(c, "governance"))
+	if s.politics != null and s.politics.laws.size() == _n:
+		var g: String = s.politics.laws[c].get("governance", "")
+		if g == "autocracy": return 0
+		if g == "oligarchy": return 1
+		if g == "census_suffrage": return 2
+		if g == "universal_suffrage": return 3
 	return 1
 
 
@@ -365,9 +380,67 @@ func relation_breakdown(a: int, b: int) -> Array:
 func relation(a: int, b: int) -> int:
 	if a == b:
 		return 100
-	var t := 0.0
-	for e: Dictionary in relation_breakdown(a, b):
-		t += float(e["value"])
+	var i := a * _n + b
+	var t := float(base_rel[i])
+	if _nb(a).has(b):
+		t -= 6.0
+	if is_allied(a, b):
+		t += 35.0
+	if has_trade_agreement(a, b):
+		t += 12.0
+	if is_rival(a, b) or is_rival(b, a):
+		t -= 30.0
+	var war_same := false
+	var war_enemy := false
+	for w: Dictionary in wars:
+		var sa := side_of(w, a)
+		if sa == 0:
+			continue
+		var sb := side_of(w, b)
+		if sb == 0:
+			continue
+		if sa == sb:
+			war_same = true
+		else:
+			war_enemy = true
+	if war_enemy:
+		t -= 40.0
+	if war_same:
+		t += 8.0
+	var ca := _claims_on(a, b)
+	var cb := _claims_on(b, a)
+	if ca > 0 or cb > 0:
+		t += -8.0 - 2.0 * minf(maxi(ca, cb) - 1, 3)
+	if improve[i] > 0.5:
+		t += improve[i]
+	if grudge[i] < -0.5:
+		t += grudge[i]
+	var ra: PackedInt32Array = rival_list[a]
+	var rb: PackedInt32Array = rival_list[b]
+	for r in ra:
+		if rb.has(r):
+			t += 8.0
+			break
+	if not wars.is_empty() and not alliances.is_empty():
+		var ally_of_enemy := 0
+		for k in alliances:
+			var ka: int = int(k) / 1000
+			var kb: int = int(k) % 1000
+			if ka == a or kb == a:
+				var x := kb if ka == a else ka
+				if x != b and at_war(x, b):
+					ally_of_enemy += 1
+			if ka == b or kb == b:
+				var y := kb if ka == b else ka
+				if y != a and at_war(y, a):
+					ally_of_enemy += 1
+		if ally_of_enemy > 0:
+			t -= 10.0 * minf(ally_of_enemy, 2)
+	var ga := _gov_step(a)
+	var gb := _gov_step(b)
+	if ga >= 0 and gb >= 0:
+		var gd := absi(ga - gb)
+		t += 4.0 - 4.0 * float(gd)
 	return int(round(clampf(t, -100.0, 100.0)))
 
 

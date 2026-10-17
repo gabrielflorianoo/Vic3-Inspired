@@ -18,6 +18,7 @@ var _lookup_img: Image
 var _lookup_tex: ImageTexture
 var _mat: ShaderMaterial
 var _any_occupied := false
+var _last_zoom := -1.0
 
 
 func setup(w: RefCounted) -> void:
@@ -68,12 +69,21 @@ func _write(id: int) -> void:
 	_lookup_img.set_pixel(id, 2, occ)
 
 
+func _write_meta(id: int) -> void:
+	var o: int = world.p_owner[id] if id > 0 else -1
+	_lookup_img.set_pixel(id, 1, Color8(o + 1, 255 if id == selected_province and id > 0 else 0,
+		255 if id == hovered_province and id > 0 else 0, 255 if o >= 0 and o == selected_country else 0))
+
+
 func set_mode(m: int) -> void:
 	mode = m
 	_mat.set_shader_parameter("map_mode", mode)
 
 
 func set_zoom(z: float) -> void:
+	if z == _last_zoom:
+		return
+	_last_zoom = z
 	_mat.set_shader_parameter("zoom", z)
 
 
@@ -83,22 +93,30 @@ func set_detail(on: bool) -> void:
 
 func select(province: int) -> void:
 	var country: int = world.p_owner[province] if province > 0 else -1
-	if country != selected_country:
-		selected_province = province
-		selected_country = country
-		refresh_all()  # whole-country highlight flag changes: rewrite N texels (~200)
-		return
-	var old := selected_province
+	var old_p := selected_province
+	var old_c := selected_country
 	selected_province = province
-	_write(old)
-	_write(province)
+	selected_country = country
+	if country != old_c:
+		if old_c >= 0 and old_c < world.c_provinces.size():
+			for p: int in world.c_provinces[old_c]:
+				_write_meta(p)
+		if country >= 0 and country < world.c_provinces.size():
+			for p: int in world.c_provinces[country]:
+				_write_meta(p)
+		_write_meta(old_p)
+		_write_meta(province)
+		_mat.set_shader_parameter("country_selected", selected_country >= 0)
+		_lookup_tex.update(_lookup_img)
+		return
+	_write_meta(old_p)
+	_write_meta(province)
 	_lookup_tex.update(_lookup_img)
 
 
 func select_country(country: int) -> void:
-	selected_country = country
-	selected_province = world.c_capital[country] if country >= 0 else 0
-	refresh_all()
+	var cap: int = world.c_capital[country] if country >= 0 else 0
+	select(cap)
 
 
 func set_hover(province: int) -> void:
@@ -106,6 +124,6 @@ func set_hover(province: int) -> void:
 		return
 	var old := hovered_province
 	hovered_province = province
-	_write(old)
-	_write(province)
+	_write_meta(old)
+	_write_meta(province)
 	_lookup_tex.update(_lookup_img)

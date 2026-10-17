@@ -89,30 +89,28 @@ func _seed() -> void:
 # --------------------------------------------------------------------------- ticks
 func tick_week() -> void:
 	## Employment is decided by the economy; here we only keep the numbers sane.
-	var m := size.size()
-	for i in m:
-		var sz := size[i]
-		if sz < 0.0 or is_nan(sz):
-			size[i] = 0.0
-			sz = 0.0
-		var prof := i % PROF_COUNT
-		if prof >= ARISTOCRAT:
-			employed[i] = sz
-		elif employed[i] > sz:
-			employed[i] = sz
+	sanitize()
 
 
 ## Cheap consistency pass GameState runs after every day (military/politics may have changed sizes).
 func sanitize() -> void:
-	var m := size.size()
-	for i in m:
-		var sz := size[i]
-		if sz < 0.0:
-			size[i] = 0.0
-			sz = 0.0
-		if i % PROF_COUNT >= ARISTOCRAT:
-			employed[i] = sz
-		elif employed[i] > sz:
+	var n: int = world.province_count
+	for p in range(1, n):
+		var b := p * PROF_COUNT
+		for k in 4:
+			var i := b + k
+			var sz := size[i]
+			if sz < 0.0 or is_nan(sz):
+				size[i] = 0.0
+				sz = 0.0
+			if employed[i] > sz:
+				employed[i] = sz
+		for k in range(4, 7):
+			var i := b + k
+			var sz := size[i]
+			if sz < 0.0 or is_nan(sz):
+				size[i] = 0.0
+				sz = 0.0
 			employed[i] = sz
 
 
@@ -177,6 +175,13 @@ func _move(i_from: int, i_to: int, amt: float) -> void:
 func _migrate(_c: int, provs: PackedInt32Array, prof: int, vac: PackedFloat64Array) -> void:
 	if provs.size() < 2:
 		return
+	var any_vac := false
+	for q in provs:
+		if vac[q * PROF_COUNT + prof] > 100.0:
+			any_vac = true
+			break
+	if not any_vac:
+		return
 	for p in provs:
 		var i := p * PROF_COUNT + prof
 		var sz := size[i]
@@ -240,17 +245,15 @@ func on_transfer(p: int, _from: int, _to: int) -> void:
 
 # --------------------------------------------------------------------------- queries
 func province_pop(p: int) -> float:
-	var t := 0.0
 	var b := p * PROF_COUNT
-	for prof in PROF_COUNT:
-		t += size[b + prof]
-	return t
+	return size[b] + size[b + 1] + size[b + 2] + size[b + 3] + size[b + 4] + size[b + 5] + size[b + 6]
 
 
 func country_pop(c: int) -> float:
 	var t := 0.0
 	for p: int in world.c_provinces[c]:
-		t += province_pop(p)
+		var b := p * PROF_COUNT
+		t += size[b] + size[b + 1] + size[b + 2] + size[b + 3] + size[b + 4] + size[b + 5] + size[b + 6]
 	return t
 
 
@@ -267,9 +270,8 @@ func unemployment(c: int) -> float:
 	var emp := 0.0
 	for p: int in world.c_provinces[c]:
 		var b: int = p * PROF_COUNT
-		for prof in ARISTOCRAT:
-			sz += size[b + prof]
-			emp += employed[b + prof]
+		sz += size[b] + size[b + 1] + size[b + 2] + size[b + 3]
+		emp += employed[b] + employed[b + 1] + employed[b + 2] + employed[b + 3]
 	return maxf(0.0, 1.0 - emp / sz) if sz > 0.0 else 0.0
 
 
@@ -278,9 +280,10 @@ func _weighted(c: int, arr: PackedFloat64Array) -> float:
 	var den := 0.0
 	for p: int in world.c_provinces[c]:
 		var b: int = p * PROF_COUNT
-		for prof in PROF_COUNT:
-			num += arr[b + prof] * size[b + prof]
-			den += size[b + prof]
+		var s0 := size[b]; var s1 := size[b + 1]; var s2 := size[b + 2]; var s3 := size[b + 3]
+		var s4 := size[b + 4]; var s5 := size[b + 5]; var s6 := size[b + 6]
+		num += arr[b] * s0 + arr[b + 1] * s1 + arr[b + 2] * s2 + arr[b + 3] * s3 + arr[b + 4] * s4 + arr[b + 5] * s5 + arr[b + 6] * s6
+		den += s0 + s1 + s2 + s3 + s4 + s5 + s6
 	return num / den if den > 0.0 else 0.0
 
 

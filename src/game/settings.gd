@@ -19,15 +19,32 @@ const DEFS := {
 }
 
 
-static func get_value(key: String) -> Variant:
-	var d: Array = DEFS[key]
+static var _cache: Dictionary = {}
+static var _loaded := false
+
+
+static func _ensure_loaded() -> void:
+	if _loaded:
+		return
+	_loaded = true
 	var cfg := ConfigFile.new()
-	if cfg.load(PATH) != OK:
-		return d[1]
-	return cfg.get_value(d[0], key, d[1])
+	if cfg.load(PATH) == OK:
+		for key: String in DEFS:
+			var d: Array = DEFS[key]
+			if cfg.has_section_key(d[0], key):
+				_cache[key] = cfg.get_value(d[0], key, d[1])
+
+
+static func get_value(key: String) -> Variant:
+	_ensure_loaded()
+	if _cache.has(key):
+		return _cache[key]
+	return DEFS[key][1]
 
 
 static func set_value(key: String, v: Variant, apply_now := true) -> void:
+	_ensure_loaded()
+	_cache[key] = v
 	var d: Array = DEFS[key]
 	var cfg := ConfigFile.new()
 	cfg.load(PATH)
@@ -38,9 +55,8 @@ static func set_value(key: String, v: Variant, apply_now := true) -> void:
 
 
 static func has_saved(key: String) -> bool:
-	var d: Array = DEFS[key]
-	var cfg := ConfigFile.new()
-	return cfg.load(PATH) == OK and cfg.has_section_key(d[0], key)
+	_ensure_loaded()
+	return _cache.has(key)
 
 
 ## Apply every setting that the user has explicitly saved.

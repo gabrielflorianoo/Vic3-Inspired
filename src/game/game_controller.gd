@@ -24,6 +24,7 @@ var blocked := false         # true while a modal (pause menu) is open
 var sim_ms_last := 0.0       # sim time spent in the last stepping frame
 var _credit := 0.0
 var _eliminated := false
+var _last_autosave_msec := -60000
 
 
 func setup(s: RefCounted) -> void:
@@ -55,6 +56,13 @@ func _process(delta: float) -> void:
 	var week := false
 	var month := false
 	while _credit >= 1.0:
+		# If we already stepped at least one day this frame and the upcoming day is a heavy
+		# weekly or monthly tick, defer it to the next frame so plain days + heavy ticks don't stack.
+		if days > 0:
+			var next_day: int = state.day + 1
+			var next_doy: int = next_day % state.DAYS_PER_YEAR
+			if (next_day % 7 == 0) or (state._dom_of_doy[next_doy] == 1):
+				break
 		state.advance_day()
 		_credit -= 1.0
 		days += 1
@@ -66,7 +74,7 @@ func _process(delta: float) -> void:
 			month = true
 			heavy = true
 			_maybe_autosave()
-		# A weekly/monthly tick is atomic (~15-20 ms), so never run a second one in the same
+		# A weekly/monthly tick is atomic, so never run a second one in the same
 		# frame: stop right after the first, even if the time budget is not yet spent.
 		if heavy or (Time.get_ticks_usec() - t0) / 1000.0 >= BUDGET_MS:
 			break
@@ -91,6 +99,12 @@ func _maybe_autosave() -> void:
 		return
 	if mode == 2 and state.month() != 1:
 		return
+	var now := Time.get_ticks_msec()
+	# At high speeds (e.g. x4/x5), a simulated month passes in ~0.2-1.5 seconds;
+	# throttle disk writes to at most once every 15 real seconds unless it's January in yearly mode.
+	if mode == 1 and now - _last_autosave_msec < 15000:
+		return
+	_last_autosave_msec = now
 	_session().save_game(state, "autosave")
 
 

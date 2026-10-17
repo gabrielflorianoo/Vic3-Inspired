@@ -267,10 +267,7 @@ func clout(c: int, ig: int) -> float:
 
 func approval(c: int, ig: int) -> float:
 	## Always equals the sum of approval_breakdown (computed live; the monthly cache is only for legitimacy).
-	var t := 0.0
-	for e: Dictionary in approval_breakdown(c, ig, false):
-		t += float(e["value"])
-	return clampf(t, -10.0, 10.0)
+	return _compute_approval(c, ig, _avg_sol(c), _war_count(c), _in_debt(c), _exhaustion(c))
 
 
 func in_government(c: int, ig: int) -> bool:
@@ -288,8 +285,18 @@ func months_since_change(c: int, cat: String) -> int:
 # --------------------------------------------------------------------------- modifiers
 func modifier(c: int, key: String) -> float:
 	var t := 0.0
-	for e: Dictionary in modifier_breakdown(c, key):
-		t += float(e["value"])
+	var lc: Dictionary = laws[c]
+	for cat: Dictionary in _cats:
+		var o: Dictionary = _opt.get(lc.get(cat["id"], ""), {})
+		var mods: Dictionary = o.get("modifiers", {})
+		if mods.has(key):
+			var v := float(mods[key])
+			if absf(v) > 0.00001:
+				t += v
+	if key == "tax_mult" and leg[c] < 50.0:
+		t -= (50.0 - leg[c]) / 50.0 * 0.4
+	elif key == "radicalism_mult" and leg[c] < 30.0:
+		t += (30.0 - leg[c]) / 30.0 * 0.25
 	return t + (1.0 if key in MULT_KEYS else 0.0)
 
 
@@ -412,6 +419,38 @@ func _refresh_clout(c: int) -> void:
 
 
 # --------------------------------------------------------------------------- approval
+func _compute_approval(c: int, ig: int, asol: float, wc: int, debt: bool, ex: float) -> float:
+	var sum := 0.0
+	var g: Dictionary = _igs[ig]
+	var prefs: Dictionary = g["prefs"]
+	var lc: Dictionary = laws[c]
+	for cat: Dictionary in _cats:
+		var oid: String = lc[cat["id"]]
+		sum += float(prefs.get(oid, 0.0))
+	var gsol := _ig_cohort_avg(c, ig, "sol", asol)
+	var sol_term := clampf((gsol - 8.0) * 0.3, -2.5, 2.5)
+	if absf(sol_term) > 0.01:
+		sum += sol_term
+	var dsol := asol - prev_sol[c]
+	var trend := clampf(dsol * 2.0, -2.0, 2.0)
+	if absf(trend) > 0.01:
+		sum += trend
+	var rad := _ig_cohort_avg(c, ig, "radicalism", 0.0)
+	if rad > 0.05:
+		sum -= rad * 4.0
+	if in_government(c, ig):
+		sum += 2.0
+	elif clout(c, ig) > 0.15:
+		sum -= 1.0
+	if debt:
+		sum -= float(g["debt_sensitivity"])
+	if ex > 5.0:
+		sum -= ex / 25.0 * (1.5 if float(g["war_attitude"]) < 0.0 else 0.7)
+	if wc > 0 and float(g["war_attitude"]) != 0.0:
+		sum += float(g["war_attitude"]) * minf(wc, 2)
+	return clampf(sum, -10.0, 10.0)
+
+
 func approval_breakdown(c: int, ig: int, text := true) -> Array:
 	## Every factor behind approval(c, ig): [{reason, value}], summing to approval (clamped to -10..10).
 	## text=false skips building the reason strings (monthly refresh only needs the numbers).
@@ -458,11 +497,12 @@ func approval_breakdown(c: int, ig: int, text := true) -> Array:
 
 func _refresh_approval(c: int) -> void:
 	var ig_n := _igs.size()
+	var asol := _avg_sol(c)
+	var wc := _war_count(c)
+	var debt := _in_debt(c)
+	var ex := _exhaustion(c)
 	for i in ig_n:
-		var t := 0.0
-		for e: Dictionary in approval_breakdown(c, i, false):
-			t += float(e["value"])
-		approval_cache[c * ig_n + i] = clampf(t, -10.0, 10.0)
+		approval_cache[c * ig_n + i] = _compute_approval(c, i, asol, wc, debt, ex)
 
 
 # --------------------------------------------------------------------------- legitimacy
@@ -491,9 +531,27 @@ func legitimacy_breakdown(c: int) -> Array:
 
 
 func _legitimacy_target(c: int) -> float:
-	var t := 0.0
-	for e: Dictionary in legitimacy_breakdown(c):
-		t += float(e["value"])
+	var t := 40.0
+	var wsum := 0.0
+	var wt := 0.0
+	var ig_n := _igs.size()
+	for i in gov_igs[c]:
+		var cl := clout(c, i)
+		wsum += approval_cache[c * ig_n + i] * cl
+		wt += cl
+	if wt > 0.0:
+		t += wsum / wt * 2.0
+	if _in_debt(c):
+		t -= 10.0
+	var ex := _exhaustion(c)
+	if ex > 0.0:
+		t -= ex * 0.3
+	var un := unrest(c)
+	if un > 0.05:
+		t -= un * 40.0
+	var sol := _avg_sol(c)
+	if absf(sol - 8.0) > 0.3:
+		t += clampf((sol - 8.0) * 1.2, -8.0, 8.0)
 	return clampf(t, 0.0, 100.0)
 
 

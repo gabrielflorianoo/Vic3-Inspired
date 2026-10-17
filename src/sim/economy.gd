@@ -916,8 +916,14 @@ func tick_week() -> void:
 	_own = world.p_owner
 	_refresh_country_mods(alive)
 	var P: int = world.province_count
-	for p in range(1, P):
-		_ctl[p] = s.controller(p)
+	if s.military != null:
+		var occ_arr: PackedInt32Array = s.military.occupier
+		for p in range(1, P):
+			var oc := occ_arr[p]
+			_ctl[p] = oc if oc >= 0 else _own[p]
+	else:
+		for p in range(1, P):
+			_ctl[p] = _own[p]
 	ms.fill(0.0)
 	md.fill(0.0)
 	src_flow.fill(0.0)
@@ -1076,6 +1082,9 @@ func _phase_household_demand(alive: PackedByteArray) -> void:
 					cost += qpc[base + j] * mp[cg + n_good[j]]
 				_gcost[(c * PC + prof) * NG + gi] = cost
 	_hh_want.fill(0.0)
+	var cp_ns := PackedFloat64Array()
+	cp_ns.resize(C * PC * NG)
+	cp_ns.fill(0.0)
 	for p in range(1, P):
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
@@ -1089,24 +1098,32 @@ func _phase_household_demand(alive: PackedByteArray) -> void:
 			var cp := c * PC + prof
 			var rem := pinc[i] * net / N
 			var gb := i * NG
-			var qb := cp * NN
-			var hb := c * NN
+			var cpg := cp * NG
 			for gi in NG:
-				var cost := _gcost[cp * NG + gi]
+				var cost := _gcost[cpg + gi]
 				var sc := 1.0
 				if cost > 0.0 and rem < cost:
 					sc = rem / cost
 				rem = maxf(rem - cost * sc, 0.0)
 				_gsc[gb + gi] = sc
-				var Ns := N * sc
-				for j in range(grp_b[gi], grp_b[gi + 1]):
-					_hh_want[hb + j] += Ns * qpc[qb + j]
+				cp_ns[cpg + gi] += N * sc
 	for c in C:
 		if alive[c] == 0:
 			continue
+		var hb := c * NN
+		for prof in PC:
+			var cp := c * PC + prof
+			var cpg := cp * NG
+			var qb := cp * NN
+			for gi in NG:
+				var ns_tot := cp_ns[cpg + gi]
+				if ns_tot <= 0.0:
+					continue
+				for j in range(grp_b[gi], grp_b[gi + 1]):
+					_hh_want[hb + j] += ns_tot * qpc[qb + j]
 		var cg := c * G
 		for j in NN:
-			var want := _hh_want[c * NN + j]
+			var want := _hh_want[hb + j]
 			if want > 0.0:
 				var g := n_good[j]
 				md[cg + g] += want
@@ -1231,6 +1248,7 @@ func _phase_settle(alive: PackedByteArray) -> void:
 		fill[i] = 1.0 if (dm <= sp or dm <= 0.0) else sp / dm
 		sold[i] = 1.0 if (sp <= dm or sp <= 0.0) else dm / sp
 	# ---- buildings: revenue, wages, dividends
+	var fw0 := floor_w[0]; var fw1 := floor_w[1]; var fw2 := floor_w[2]; var fw3 := floor_w[3]
 	for p in range(1, P):
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
@@ -1256,15 +1274,16 @@ func _phase_settle(alive: PackedByteArray) -> void:
 				cost_in += iq[j] * bsc * io * mp[cg + ig[j]]
 			var va := rev - cost_in
 			var wb := b * PC
-			var st := staff[base + b]
-			var floors_sum := 0.0
-			for k in LABOR_PROFS:
-				floors_sum += b_work[wb + k] * float(L) * st * floor_w[k] * wmul
+			var bw := bsc * wmul
+			var f0 := b_work[wb] * fw0 * bw
+			var f1 := b_work[wb + 1] * fw1 * bw
+			var f2 := b_work[wb + 2] * fw2 * bw
+			var f3 := b_work[wb + 3] * fw3 * bw
+			var floors_sum := f0 + f1 + f2 + f3
 			if b_state[b] == 1:
-				for k in LABOR_PROFS:
-					_inc[pb + k] += b_work[wb + k] * float(L) * st * floor_w[k] * wmul
+				_inc[pb] += f0; _inc[pb + 1] += f1; _inc[pb + 2] += f2; _inc[pb + 3] += f3
 				profit[base + b] = -(floors_sum + cost_in)
-				wpw[base + b] = floor_w[P_LABORER] * wmul if b == i_railway else floor_w[P_CLERK] * wmul
+				wpw[base + b] = fw1 * wmul if b == i_railway else fw3 * wmul
 				gdp_w[c] += floors_sum
 				_state_cost_add(c, floors_sum + cost_in)
 				continue
@@ -1272,8 +1291,7 @@ func _phase_settle(alive: PackedByteArray) -> void:
 			if floors_sum > 0.0:
 				kb = clampf(WAGE_SHARE * maxf(va, 0.0) / floors_sum, 1.0, MAX_WAGE_K)
 			var wsum := floors_sum * kb
-			for k in LABOR_PROFS:
-				_inc[pb + k] += b_work[wb + k] * float(L) * st * floor_w[k] * wmul * kb
+			_inc[pb] += f0 * kb; _inc[pb + 1] += f1 * kb; _inc[pb + 2] += f2 * kb; _inc[pb + 3] += f3 * kb
 			var pr := va - wsum
 			profit[base + b] = pr
 			var workers := emp[base + b]
@@ -1287,6 +1305,8 @@ func _phase_settle(alive: PackedByteArray) -> void:
 					_inc[pb + P_CAPITALIST] += pr
 	# ---- other incomes, tax base
 	var psize: PackedFloat64Array = pops.size
+	var sw0 := sub_w[0]; var sw1 := sub_w[1]; var sw2 := sub_w[2]; var sw3 := sub_w[3]
+	var sw_ar := sub_w[P_ARISTOCRAT]; var sw_cap := sub_w[P_CAPITALIST]; var fw_sol := floor_w[P_SOLDIER]
 	for c in C:
 		tax_base[c] = 0.0
 		bud_mil[c] = 0.0
@@ -1296,15 +1316,19 @@ func _phase_settle(alive: PackedByteArray) -> void:
 			continue
 		var pb := p * PC
 		var wmul := _m_wage[c]
-		for k in LABOR_PROFS:
-			var u := maxf(psize[pb + k] - _emp[pb + k], 0.0)
-			_inc[pb + k] += u * sub_w[k]
-		_emp[pb + P_ARISTOCRAT] = psize[pb + P_ARISTOCRAT]
-		_emp[pb + P_CAPITALIST] = psize[pb + P_CAPITALIST]
-		_emp[pb + P_SOLDIER] = psize[pb + P_SOLDIER]
-		_inc[pb + P_ARISTOCRAT] += psize[pb + P_ARISTOCRAT] * sub_w[P_ARISTOCRAT]
-		_inc[pb + P_CAPITALIST] += psize[pb + P_CAPITALIST] * sub_w[P_CAPITALIST]
-		var pay := psize[pb + P_SOLDIER] * floor_w[P_SOLDIER] * wmul
+		_inc[pb] += maxf(psize[pb] - _emp[pb], 0.0) * sw0
+		_inc[pb + 1] += maxf(psize[pb + 1] - _emp[pb + 1], 0.0) * sw1
+		_inc[pb + 2] += maxf(psize[pb + 2] - _emp[pb + 2], 0.0) * sw2
+		_inc[pb + 3] += maxf(psize[pb + 3] - _emp[pb + 3], 0.0) * sw3
+		var n_ar := psize[pb + P_ARISTOCRAT]
+		var n_cap := psize[pb + P_CAPITALIST]
+		var n_sol := psize[pb + P_SOLDIER]
+		_emp[pb + P_ARISTOCRAT] = n_ar
+		_emp[pb + P_CAPITALIST] = n_cap
+		_emp[pb + P_SOLDIER] = n_sol
+		_inc[pb + P_ARISTOCRAT] += n_ar * sw_ar
+		_inc[pb + P_CAPITALIST] += n_cap * sw_cap
+		var pay := n_sol * fw_sol * wmul
 		_inc[pb + P_SOLDIER] += pay
 		bud_mil[c] += pay
 	# ---- consumption: delivered baskets -> standard of living
@@ -1312,32 +1336,52 @@ func _phase_settle(alive: PackedByteArray) -> void:
 	var nf_num := PackedFloat64Array()
 	nf_num.resize(C * NN)
 	nf_num.fill(0.0)
-	var nf_den := PackedFloat64Array()
-	nf_den.resize(C * NN)
-	nf_den.fill(0.0)
+	var c_pop := PackedFloat64Array()
+	c_pop.resize(C)
+	c_pop.fill(0.0)
 	var NG := grp_b.size() - 1
+	var mf_fill := PackedFloat64Array()
+	mf_fill.resize(C * PC * NN)
+	for c in C:
+		if alive[c] == 0:
+			continue
+		var cg := c * G
+		for prof in PC:
+			var base_m := (c * PC + prof) * NN
+			for j in NN:
+				mf_fill[base_m + j] = n_mult[j * PC + prof] * fill[cg + n_good[j]]
 	for p in range(1, P):
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
 			continue
-		var cg := c * G
+		var cn := c * NN
 		for prof in PC:
 			var i := p * PC + prof
 			var N := psize[i]
 			if N <= 0.0:
 				continue
+			c_pop[c] += N
 			var sol_t := 0.0
 			var gb := i * NG
+			var base_m := (c * PC + prof) * NN
 			for gi in NG:
 				var sc := _gsc[gb + gi]
 				for j in range(grp_b[gi], grp_b[gi + 1]):
-					var frac := minf(1.0, n_mult[j * PC + prof] * sc * fill[cg + n_good[j]])
-					sol_t += need_w[c * NN + j] * frac
-					nf_num[c * NN + j] += N * frac
-					nf_den[c * NN + j] += N
+					var frac := minf(1.0, mf_fill[base_m + j] * sc)
+					sol_t += need_w[cn + j] * frac
+					nf_num[cn + j] += N * frac
 			psol[i] += SOL_SMOOTH * (20.0 * sol_t - psol[i])
-	for i in C * NN:
-		need_fill[i] = nf_num[i] / nf_den[i] if (nf_den[i] > 0.0 and need_scale[i] > 0.0) else 1.0
+	for c in C:
+		var den := c_pop[c]
+		var cn := c * NN
+		if den > 0.0:
+			var inv_den := 1.0 / den
+			for j in NN:
+				var idx := cn + j
+				need_fill[idx] = nf_num[idx] * inv_den if need_scale[idx] > 0.0 else 1.0
+		else:
+			for j in NN:
+				need_fill[cn + j] = 1.0
 	# ---- hand results to the population
 	pops.employed = _emp.duplicate()
 	pops.income = _inc.duplicate()
@@ -1347,8 +1391,7 @@ func _phase_settle(alive: PackedByteArray) -> void:
 		var tb := 0.0
 		for p: int in world.c_provinces[c]:
 			var pb := p * PC
-			for k in PC:
-				tb += _inc[pb + k]
+			tb += _inc[pb] + _inc[pb + 1] + _inc[pb + 2] + _inc[pb + 3] + _inc[pb + 4] + _inc[pb + 5] + _inc[pb + 6]
 		tax_base[c] = tb
 	# ---- prices follow the market balance
 	for i in C * G:

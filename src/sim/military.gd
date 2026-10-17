@@ -158,14 +158,7 @@ func power_breakdown(c: int) -> Array:
 
 
 func power(c: int) -> float:
-	var t := 1.0
-	var b := 0.0
-	for e: Dictionary in power_breakdown(c):
-		if e.get("mult", false):
-			t *= float(e["value"])
-		else:
-			b = float(e["value"])
-	return b * t
+	return bat[c] * (0.4 + 0.6 * equipment_fill(c)) * morale[c] * (1.0 + _tech_mod(c, "army_power"))
 
 
 func army(c: int) -> Dictionary:
@@ -302,15 +295,18 @@ var _rail_t := -2
 
 
 func _railway_level(p: int) -> int:
-	if s.econ != null and s.econ.has_method("buildings_in"):
-		if _rail_t == -2:
-			var ids = s.econ.get("b_ids")
-			_rail_t = ids.find("railway") if ids != null else -1
-		if _rail_t < 0:
-			return 0
-		for b in s.econ.buildings_in(p):
-			if int(b.get("type", -1)) == _rail_t:
-				return int(b.get("level", 0))
+	if s.econ != null:
+		if s.econ.has_method("railway_level"):
+			return int(s.econ.railway_level(p))
+		if s.econ.has_method("buildings_in"):
+			if _rail_t == -2:
+				var ids = s.econ.get("b_ids")
+				_rail_t = ids.find("railway") if ids != null else -1
+			if _rail_t < 0:
+				return 0
+			for b in s.econ.buildings_in(p):
+				if int(b.get("type", -1)) == _rail_t:
+					return int(b.get("level", 0))
 	return 0
 
 

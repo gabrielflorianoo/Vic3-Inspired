@@ -14,6 +14,8 @@ const BORDER := Color(0.50, 0.41, 0.24)
 const SparkScript := preload("res://src/ui/spark.gd")
 
 static var _theme: Theme
+static var _style_cache: Dictionary = {}
+static var _bar_fill_cache: Dictionary = {}
 
 
 ## The Session autoload, fetched by path so scripts also parse standalone.
@@ -27,6 +29,9 @@ static func treasury(econ: RefCounted, c: int) -> float:
 
 
 static func style(bg: Color, border: Color, bw := 1, radius := 3, pad := 8) -> StyleBoxFlat:
+	var key := "%s|%s|%d|%d|%d" % [bg.to_html(), border.to_html(), bw, radius, pad]
+	if _style_cache.has(key):
+		return _style_cache[key]
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
 	sb.border_color = border
@@ -35,6 +40,7 @@ static func style(bg: Color, border: Color, bw := 1, radius := 3, pad := 8) -> S
 	sb.set_content_margin_all(pad)
 	sb.shadow_color = Color(0, 0, 0, 0.35)
 	sb.shadow_size = 4
+	_style_cache[key] = sb
 	return sb
 
 
@@ -158,7 +164,13 @@ static func bar(frac: float, col := Color(0.62, 0.50, 0.24), w := 120.0, h := 10
 	p.show_percentage = false
 	p.custom_minimum_size = Vector2(w, h)
 	p.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var fill := style(col, col, 0, 2, 0)
+	var key := col.to_rgba32()
+	var fill: StyleBoxFlat = _bar_fill_cache.get(key, null)
+	if fill == null:
+		fill = StyleBoxFlat.new()
+		fill.bg_color = col
+		fill.set_corner_radius_all(2)
+		_bar_fill_cache[key] = fill
 	p.add_theme_stylebox_override("fill", fill)
 	if tip != "":
 		p.tooltip_text = tip

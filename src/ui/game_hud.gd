@@ -262,9 +262,9 @@ func _init_history() -> void:
 func _record_prices() -> void:
 	for g in _hist.size():
 		var a: PackedFloat32Array = _hist[g]
+		if a.size() >= HISTORY:
+			a.remove_at(0)
 		a.append(state.econ.price(state.player, g))
-		if a.size() > HISTORY:
-			a = a.slice(a.size() - HISTORY)
 		_hist[g] = a
 
 
@@ -280,11 +280,15 @@ func mouse_over_ui(pos: Vector2) -> bool:
 
 # --------------------------------------------------------------- top bar
 
+var _last_fit_w := -1.0
+var _last_bar_day := -1
+
 ## Keeps the Menu button on screen at any window size / UI scale: lowest-priority stats are hidden
 ## (their numbers live in the Overview panel) until the whole row fits.
 func _fit_top_bar() -> void:
 	if _top_row == null or _bar_res == null:
 		return
+	_last_fit_w = size.x
 	var order: Array = [_bar_res, _bar_gdp, _bar_pop, _bar_rad, _bar_leg]   # hidden first -> last
 	for l: Control in order:
 		l.visible = true
@@ -299,6 +303,7 @@ func update_bar(full: bool) -> void:
 	_bar_date.text = state.date_string()
 	if not full:
 		return
+	_last_bar_day = state.day
 	var np: int = state.diplo.proposals_for(state.player).size()
 	_tab_btns["diplomacy"].text = "Diplomacy (%d)" % np if np > 0 else "Diplomacy"
 	_tab_btns["diplomacy"].add_theme_color_override("font_color", K.WARN if np > 0 else K.INK)
@@ -333,7 +338,8 @@ func update_bar(full: bool) -> void:
 		_bar_res.text = "%s %d%%" % [state.tech.tech_name(rid), int(state.tech.progress(c) * 100.0)]
 		_bar_res.add_theme_color_override("font_color", K.INK)
 		_bar_res.tooltip_text = "Researching %s\n%.1f points / week" % [state.tech.tech_name(rid), state.tech.points_per_week(c)]
-	_fit_top_bar.call_deferred()
+	if size.x != _last_fit_w:
+		_fit_top_bar.call_deferred()
 
 
 func _on_speed_changed(speed: int) -> void:
@@ -478,7 +484,8 @@ func focus_province(p: int) -> void:
 func refresh_now() -> void:
 	_dirty = false
 	_last_refresh = Time.get_ticks_msec() / 1000.0
-	update_bar(true)
+	if _last_bar_day != state.day:
+		update_bar(true)
 	if _panel != null:
 		_panel.refresh()
 		_fit_host.call_deferred()
@@ -489,7 +496,8 @@ func refresh_now() -> void:
 func _process(_delta: float) -> void:
 	if _dirty:
 		var now := Time.get_ticks_msec() / 1000.0
-		if now - _last_refresh >= REFRESH_MIN:
+		var min_interval := 1.0 if (ctrl != null and ctrl.speed >= 4) else REFRESH_MIN
+		if now - _last_refresh >= min_interval:
 			refresh_now()
 
 

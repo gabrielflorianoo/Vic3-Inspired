@@ -220,25 +220,30 @@ func date_string() -> String:
 func advance_day() -> void:
 	day += 1
 	var doy := day % DAYS_PER_YEAR
+	var is_week := (day % 7 == 0)
+	var is_month := (_dom_of_doy[doy] == 1)
 	if profile:
-		_run_profiled(_day_calls, "day")
-		if day % 7 == 0:
+		if not _day_calls.is_empty():
+			_run_profiled(_day_calls, "day")
+		if is_week:
 			_run_profiled(_week_calls, "week")
-		if _dom_of_doy[doy] == 1:
+		if is_month:
 			_run_profiled(_month_calls, "month")
 			month_index += 1
-		pops.sanitize()
+		if is_week or is_month or not _day_calls.is_empty():
+			pops.sanitize()
 		return
 	for e: Array in _day_calls:
 		(e[1] as Callable).call()
-	if day % 7 == 0:
+	if is_week:
 		for e: Array in _week_calls:
 			(e[1] as Callable).call()
-	if _dom_of_doy[doy] == 1:
+	if is_month:
 		for e: Array in _month_calls:
 			(e[1] as Callable).call()
 		month_index += 1
-	pops.sanitize()
+	if is_week or is_month or not _day_calls.is_empty():
+		pops.sanitize()
 
 
 func _run_profiled(calls: Array, tag: String) -> void:
@@ -278,35 +283,36 @@ func is_player(c: int) -> bool:
 ## module present they still default to 1.0.
 func modifier(c: int, key: String) -> float:
 	var v := 0.0
-	if politics != null and politics.has_method("modifier"):
+	if politics != null:
 		v += float(politics.modifier(c, key))
 	elif key.ends_with("_mult"):
 		v += 1.0
-	if tech != null and tech.has_method("modifier"):
+	if tech != null:
 		v += float(tech.modifier(c, key))
 	return v
 
 
 func trade_partners(c: int) -> PackedInt32Array:
-	if diplo != null and diplo.has_method("trade_partners"):
-		return PackedInt32Array(diplo.trade_partners(c))
+	if diplo != null:
+		return diplo.trade_partners_packed(c) if diplo.has_method("trade_partners_packed") else PackedInt32Array(diplo.trade_partners(c))
 	return PackedInt32Array()
 
 
 func arms_demand(c: int) -> float:
-	if military != null and military.has_method("arms_demand"):
+	if military != null:
 		return float(military.arms_demand(c))
 	return 0.0
 
 
 func controller(p: int) -> int:
-	if military != null and military.has_method("controller"):
-		return int(military.controller(p))
+	if military != null:
+		var o: int = military.occupier[p]
+		return o if o >= 0 else world.p_owner[p]
 	return world.p_owner[p]
 
 
 func military_upkeep(c: int) -> float:
-	if military != null and military.has_method("upkeep"):
+	if military != null:
 		return float(military.upkeep(c))
 	return 0.0
 

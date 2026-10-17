@@ -25,9 +25,9 @@ vec4 lk(int id, int row) {
 	return texelFetch(lookup_tex, ivec2(id, row), 0);
 }
 
-// True when neighbour n is land owned by someone other than `me` (sea ignored).
-bool foreign(int n, float me) {
-	return n != 0 && lk(n, 1).r != me;
+// True when neighbour n is land owned by someone other than `me` (sea and same province ignored).
+bool foreign(int n, int id, float me) {
+	return n != id && n != 0 && lk(n, 1).r != me;
 }
 
 vec3 hash_color(int id) {
@@ -43,8 +43,9 @@ void fragment() {
 	int id = pid(uv);
 
 	// Border sample distances in texels: roughly constant on screen.
-	float w1 = max(0.6, 0.9 / zoom);
-	float w2 = max(1.6, 2.6 / zoom);
+	float inv_z = 1.0 / zoom;
+	float w1 = max(0.6, 0.9 * inv_z);
+	float w2 = max(1.6, 2.6 * inv_z);
 	vec2 a = px * w1;
 	vec2 b = px * w2;
 	int n0 = pid(uv + vec2(a.x, 0.0));
@@ -56,16 +57,19 @@ void fragment() {
 	vec3 col;
 	if (id == 0) {
 		col = terrain;
-		bool near_land = n0 + n1 + n2 + n3 > 0;
-		int m0 = pid(uv + vec2(b.x, 0.0));
-		int m1 = pid(uv - vec2(b.x, 0.0));
-		int m2 = pid(uv + vec2(0.0, b.y));
-		int m3 = pid(uv - vec2(0.0, b.y));
-		if (m0 + m1 + m2 + m3 > 0) col = mix(col, vec3(0.62, 0.72, 0.70), 0.18);
-		if (near_land) col *= 0.55;
-		if (detail > 0.5) {
+		if (p_edge) {
+			col *= 0.55 * mix(vec3(1.0), vec3(0.62, 0.72, 0.70), 0.18);
+		} else if (detail > 0.5) {
+			int m0 = pid(uv + vec2(b.x, 0.0));
+			int m1 = pid(uv - vec2(b.x, 0.0));
+			int m2 = pid(uv + vec2(0.0, b.y));
+			int m3 = pid(uv - vec2(0.0, b.y));
+			if ((m0 | m1 | m2 | m3) != 0) col = mix(col, vec3(0.62, 0.72, 0.70), 0.18);
+		}
+		if (detail > 0.5 && zoom > 0.6) {
+			float w_fade = min(zoom - 0.6, 1.0);
 			float wave = sin(uv.x * 900.0 + TIME * 0.6 + sin(uv.y * 300.0) * 2.0) * sin(uv.y * 700.0 - TIME * 0.4);
-			col += vec3(0.012, 0.018, 0.022) * wave * clamp(zoom - 0.6, 0.0, 1.0);
+			col += vec3(0.012, 0.018, 0.022) * (wave * w_fade);
 		}
 	} else {
 		vec4 own = lk(id, 0);
@@ -87,26 +91,33 @@ void fragment() {
 			vec4 occ = lk(id, 2);
 			if (occ.a > 0.5) {
 				// Occupied: diagonal stripes in the occupier's colour (screen-space, constant width).
-				float stripe = step(0.5, fract((FRAGCOORD.x + FRAGCOORD.y) / 9.0));
+				float stripe = step(0.5, fract((FRAGCOORD.x + FRAGCOORD.y) * 0.1111111));
 				col = mix(col, occ.rgb * (0.55 + 0.9 * luma), stripe * 0.85);
 			}
 		}
 
 		// Country borders: dark outer line + tinted inner band.
 		float me = meta.r;
-		bool c_outer = foreign(n0, me) || foreign(n1, me) || foreign(n2, me) || foreign(n3, me);
-		int m0 = pid(uv + vec2(b.x, 0.0));
-		int m1 = pid(uv - vec2(b.x, 0.0));
-		int m2 = pid(uv + vec2(0.0, b.y));
-		int m3 = pid(uv - vec2(0.0, b.y));
-		bool c_inner = foreign(m0, me) || foreign(m1, me) || foreign(m2, me) || foreign(m3, me);
-		bool coast = n0 == 0 || n1 == 0 || n2 == 0 || n3 == 0;
+		bool c_outer = false;
+		bool coast = false;
+		if (p_edge) {
+			coast = n0 == 0 || n1 == 0 || n2 == 0 || n3 == 0;
+			c_outer = foreign(n0, id, me) || foreign(n1, id, me) || foreign(n2, id, me) || foreign(n3, id, me);
+		}
+		bool c_inner = false;
+		if (map_mode != 2 && detail > 0.5) {
+			int m0 = pid(uv + vec2(b.x, 0.0));
+			int m1 = pid(uv - vec2(b.x, 0.0));
+			int m2 = pid(uv + vec2(0.0, b.y));
+			int m3 = pid(uv - vec2(0.0, b.y));
+			c_inner = foreign(m0, id, me) || foreign(m1, id, me) || foreign(m2, id, me) || foreign(m3, id, me);
+		}
 
 		if (p_edge) {
 			float fade = map_mode == 2 ? 1.0 : smoothstep(0.55, 1.1, zoom);
 			col = mix(col, col * 0.62, 0.8 * fade);
 		}
-		if (c_inner && map_mode != 2) {
+		if (c_inner) {
 			col = mix(col, own.rgb * 0.55, 0.45);
 		}
 		if (c_outer) {

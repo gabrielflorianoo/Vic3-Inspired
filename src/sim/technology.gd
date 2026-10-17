@@ -283,10 +283,15 @@ func points_breakdown(c: int) -> Array:
 
 
 func points_per_week(c: int) -> float:
-	var t := 0.0
-	for e: Dictionary in points_breakdown(c):
-		t += float(e["value"])
-	return t
+	var clerks := 0.0
+	var lit := 0.25
+	if s.pops != null:
+		clerks = float(s.pops.country_prof(c, 3))
+		lit = float(s.pops.literacy_of(c))
+	else:
+		clerks = 0.03 * 20000.0 * s.world.c_provinces[c].size()
+	var base := BASE_POINTS + clerks * CLERK_RATE * (0.3 + lit)
+	return base * _research_mult(c)
 
 
 func tick_week() -> void:

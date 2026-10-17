@@ -259,17 +259,17 @@ func _on_stepped(_days: int, week: bool, _month: bool) -> void:
 		hud.refresh_now()
 		_controllers = _snapshot_controllers()
 	elif week:
-		var snap := _snapshot_controllers()
-		if snap != _controllers:
-			_controllers = snap
+		if state.military != null and state.military.occupier != _controllers:
+			_controllers = state.military.occupier.duplicate()
 			map_view.refresh_all()
 
 
 func _snapshot_controllers() -> PackedInt32Array:
+	if state != null and state.military != null:
+		return state.military.occupier.duplicate()
 	var out := PackedInt32Array()
 	out.resize(world.province_count)
-	for p in range(1, world.province_count):
-		out[p] = state.military.controller(p)
+	out.fill(-1)
 	return out
 
 
@@ -323,12 +323,14 @@ func _set_mode(m: int) -> void:
 
 
 func _select(province: int) -> void:
+	var prev: int = map_view.selected_province
 	map_view.select(province)
 	if hud != null:
 		hud.show_selection(province)
 	if pick != null:
 		pick.show_country(world.p_owner[province] if province > 0 else -1)
-	overlay.queue_redraw()
+	if prev != province and overlay.lod >= overlay.LOD_REGIONAL:
+		overlay.queue_redraw()
 
 
 func _process(_delta: float) -> void:
