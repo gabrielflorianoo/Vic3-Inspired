@@ -152,10 +152,18 @@ var short_lost := PackedFloat64Array()  # c*B
 var short_lvl := PackedFloat64Array()
 var short_good := PackedInt32Array()
 var queues: Array = []                  # per country: Array of {province,type,progress,cost}
+var priv_queues: Array = []             # per country: Array of {province,type,progress,cost,investor}
+var inv_pool := PackedFloat64Array()    # c: private investment pool balance
+var inv_inflow := PackedFloat64Array()  # c: weekly private dividend reinvestment inflow
+var inv_outflow := PackedFloat64Array() # c: weekly private construction spending
+var auto_priv := PackedInt32Array()     # c: 1 if state-owned buildings are open for automatic privatization
 
 # --- province state
 var lvl := PackedInt32Array()           # p*B
 var cap := PackedInt32Array()
+var priv_lvl := PackedInt32Array()      # p*B: privately owned levels (domestic + foreign)
+var for_lvl := PackedInt32Array()       # p*B: foreign-owned private levels
+var for_owner := PackedInt32Array()     # p*B: investor country ID of foreign levels (-1 if none)
 var emp := PackedFloat64Array()
 var staff := PackedFloat64Array()
 var wpw := PackedFloat64Array()
@@ -199,8 +207,8 @@ const PERSIST_F64 := ["mp", "ms", "md", "fill", "sold", "src_flow", "snk_flow", 
 	"ref_demand", "ref_src", "ref_snk", "new_price", "new_supply", "new_demand", "new_src", "new_snk", "extra_demand",
 	"need_scale", "need_w", "need_fill", "tre", "gdp_w", "tax_base", "bud_tax", "bud_tariff", "bud_admin", "bud_mil",
 	"bud_con", "bud_int", "mil_arms", "trade_vol", "admin_staff", "short_lost", "short_lvl", "emp", "staff", "wpw",
-	"profit", "bout", "bio", "bscale", "tp", "rail_bonus", "dep", "vacant"]
-const PERSIST_I32 := ["tax_level_local", "short_good", "lvl", "cap"]
+	"profit", "bout", "bio", "bscale", "tp", "rail_bonus", "dep", "vacant", "inv_pool", "inv_inflow", "inv_outflow"]
+const PERSIST_I32 := ["tax_level_local", "short_good", "lvl", "cap", "priv_lvl", "for_lvl", "for_owner", "auto_priv"]
 
 
 # =========================================================================== setup
@@ -355,7 +363,8 @@ func _alloc() -> void:
 		arr.fill(1.0)
 		set(a, arr)
 	for a in ["tre", "gdp_w", "tax_base", "bud_tax", "bud_tariff", "bud_admin", "bud_mil", "bud_con", "bud_int",
-			"mil_arms", "trade_vol", "admin_staff", "_m_wage", "_m_tax", "_m_tariff", "_m_trade", "_tariff_rev", "_con_money"]:
+			"mil_arms", "trade_vol", "admin_staff", "_m_wage", "_m_tax", "_m_tariff", "_m_trade", "_tariff_rev", "_con_money",
+			"inv_pool", "inv_inflow", "inv_outflow"]:
 		var arr := PackedFloat64Array()
 		arr.resize(C)
 		arr.fill(0.0)
@@ -363,18 +372,24 @@ func _alloc() -> void:
 	_m_out.resize(C * 3)
 	_m_out.fill(1.0)
 	tax_level_local.resize(C); tax_level_local.fill(1)
+	auto_priv.resize(C); auto_priv.fill(0)
 	_con_ok.resize(C); _con_ok.fill(1)
 	short_lost.resize(C * B); short_lost.fill(0.0)
 	short_lvl.resize(C * B); short_lvl.fill(0.0)
 	short_good.resize(C * B); short_good.fill(-1)
 	queues.clear()
+	priv_queues.clear()
 	_partners.clear()
 	for c in C:
 		queues.append([])
+		priv_queues.append([])
 		_partners.append(PackedInt32Array())
 	var pb := P * B
 	lvl.resize(pb); lvl.fill(0)
 	cap.resize(pb); cap.fill(0)
+	priv_lvl.resize(pb); priv_lvl.fill(0)
+	for_lvl.resize(pb); for_lvl.fill(0)
+	for_owner.resize(pb); for_owner.fill(-1)
 	for a in ["emp", "staff", "wpw", "profit", "bout", "bio", "bscale", "tp"]:
 		var arr := PackedFloat64Array()
 		arr.resize(pb)
@@ -894,6 +909,14 @@ func _place_peasant(c: int, provs: PackedInt32Array, b: int, q_req: float, pool:
 func _finish_seed() -> void:
 	for c in C:
 		queues[c] = []
+		priv_queues[c] = []
+	var P: int = world.province_count
+	for p in range(1, P):
+		var base := p * B
+		for b in B:
+			var L := lvl[base + b]
+			if L > 0 and b_state[b] == 0:
+				priv_lvl[base + b] = L / 2
 	# prices, flows start at base; refs equal current
 	new_price = mp.duplicate()
 	ref_price = mp.duplicate()
@@ -915,7 +938,9 @@ func warm_up(weeks: int) -> void:
 		tick_week()
 	for c in C:
 		tre[c] = 16.0 * maxf(bud_tax[c] + bud_tariff[c], 0.0)
+		inv_pool[c] = 10.0 * maxf(inv_inflow[c], 25.0)
 		queues[c] = []
+		priv_queues[c] = []
 	_snapshot_refs()
 	_snapshot_refs()
 	week = 0
@@ -949,6 +974,8 @@ func tick_week() -> void:
 	trade_vol.fill(0.0)
 	gdp_w.fill(0.0)
 	bud_admin.fill(0.0)
+	inv_inflow.fill(0.0)
+	inv_outflow.fill(0.0)
 	admin_staff.fill(0.0)
 	short_lost.fill(0.0)
 	short_lvl.fill(0.0)
@@ -1199,17 +1226,28 @@ func _phase_state_demand(alive: PackedByteArray) -> void:
 		var q: Array = queues[c]
 		var ok := tre[c] > -8.0 * maxf(bud_tax[c], 1.0)
 		_con_ok[c] = 1 if ok else 0
-		if not ok:
-			continue
-		var n := mini(q.size(), _con_slots(c))
-		for k in n:
-			var t: int = q[k]["type"]
-			var bg: PackedInt32Array = b_bg_g[t]
-			var bq: PackedFloat64Array = b_bg_q[t]
-			for j in bg.size():
-				var d := bq[j] / BUILD_WEEKS
-				md[cg + bg[j]] += d
-				snk_flow[(cg + bg[j]) * T + TAG_CON] += d
+		if ok:
+			var n := mini(q.size(), _con_slots(c))
+			for k in n:
+				var t: int = q[k]["type"]
+				var bg: PackedInt32Array = b_bg_g[t]
+				var bq: PackedFloat64Array = b_bg_q[t]
+				for j in bg.size():
+					var d := bq[j] / BUILD_WEEKS
+					md[cg + bg[j]] += d
+					snk_flow[(cg + bg[j]) * T + TAG_CON] += d
+		var pq_list: Array = priv_queues[c]
+		if not pq_list.is_empty():
+			var pq: Dictionary = pq_list[0]
+			var inv_c: int = int(pq.get("investor", c))
+			if inv_c >= 0 and inv_c < C and inv_pool[inv_c] > 1.0:
+				var pt: int = int(pq["type"])
+				var pbg: PackedInt32Array = b_bg_g[pt]
+				var pbq: PackedFloat64Array = b_bg_q[pt]
+				for j in pbg.size():
+					var pd := pbq[j] / BUILD_WEEKS
+					md[cg + pbg[j]] += pd
+					snk_flow[(cg + pbg[j]) * T + TAG_CON] += pd
 
 
 func _phase_trade(alive: PackedByteArray) -> void:
@@ -1321,6 +1359,18 @@ func _phase_settle(alive: PackedByteArray) -> void:
 					_inc[pb + P_CAPITALIST] += pr * 0.3
 				else:
 					_inc[pb + P_CAPITALIST] += pr
+				var reinv_rate: float = 0.28 if _m_tariff[c] <= 0.001 else 0.18
+				var reinv: float = pr * (reinv_rate * (0.65 if b_owner[b] == 0 else 1.0))
+				var flv: int = for_lvl[base + b]
+				var fo: int = for_owner[base + b]
+				if flv > 0 and fo >= 0 and fo < C and alive[fo] != 0 and lvl[base + b] > 0:
+					var f_sh: float = clampf(float(flv) / float(lvl[base + b]), 0.0, 1.0)
+					var f_div: float = reinv * f_sh * 0.65
+					inv_inflow[fo] += f_div
+					inv_pool[fo] += f_div
+					reinv -= f_div
+				inv_inflow[c] += reinv
+				inv_pool[c] += reinv
 	# ---- other incomes, tax base
 	var psize: PackedFloat64Array = pops.size
 	var sw0 := sub_w[0]; var sw1 := sub_w[1]; var sw2 := sub_w[2]; var sw3 := sub_w[3]
@@ -1432,46 +1482,89 @@ func _phase_construction(alive: PackedByteArray) -> void:
 		bud_con[c] = 0.0
 		if alive[c] == 0:
 			continue
-		var q: Array = queues[c]
-		if q.is_empty():
-			continue
 		var cg := c * G
-		var n := mini(q.size(), _con_slots(c))
-		var ok := _con_ok[c] == 1
-		var k := 0
-		var seen := 0
-		while seen < n and k < q.size():
-			var proj: Dictionary = q[k]
-			var p: int = proj["province"]
-			var t: int = proj["type"]
-			if world.p_owner[p] != c:
-				q.remove_at(k)
-				continue
-			seen += 1
-			var f := 0.0
-			var mfill := 1.0
-			var bg: PackedInt32Array = b_bg_g[t]
-			var bq: PackedFloat64Array = b_bg_q[t]
-			for j in bg.size():
-				mfill = minf(mfill, fill[cg + bg[j]])
-			if ok:
-				f = mfill / BUILD_WEEKS
-			var money: float = proj["cost"] * f
-			var goods_val := 0.0
-			for j in bg.size():
-				goods_val += bq[j] * f * mp[cg + bg[j]]
-			bud_con[c] += money + goods_val
-			proj["progress"] = float(proj["progress"]) + proj["cost"] * f
-			var pb := p * PC
-			pinc[pb + P_LABORER] += 0.6 * money
-			pinc[pb + P_CAPITALIST] += 0.4 * money
-			if float(proj["progress"]) >= float(proj["cost"]) - 1e-6:
-				lvl[p * B + t] += 1
-				q.remove_at(k)
-				if s.is_player(c):
-					s.log_event(c, "economy", "%s completed in %s." % [b_names[t], world.p_name[p]])
-				continue
-			k += 1
+		var q: Array = queues[c]
+		if not q.is_empty():
+			var n := mini(q.size(), _con_slots(c))
+			var ok := _con_ok[c] == 1
+			var k := 0
+			var seen := 0
+			while seen < n and k < q.size():
+				var proj: Dictionary = q[k]
+				var p: int = proj["province"]
+				var t: int = proj["type"]
+				if world.p_owner[p] != c:
+					q.remove_at(k)
+					continue
+				seen += 1
+				var f := 0.0
+				var mfill := 1.0
+				var bg: PackedInt32Array = b_bg_g[t]
+				var bq: PackedFloat64Array = b_bg_q[t]
+				for j in bg.size():
+					mfill = minf(mfill, fill[cg + bg[j]])
+				if ok:
+					f = mfill / BUILD_WEEKS
+				var money: float = proj["cost"] * f
+				var goods_val := 0.0
+				for j in bg.size():
+					goods_val += bq[j] * f * mp[cg + bg[j]]
+				bud_con[c] += money + goods_val
+				proj["progress"] = float(proj["progress"]) + proj["cost"] * f
+				var pb := p * PC
+				pinc[pb + P_LABORER] += 0.6 * money
+				pinc[pb + P_CAPITALIST] += 0.4 * money
+				if float(proj["progress"]) >= float(proj["cost"]) - 1e-6:
+					lvl[p * B + t] += 1
+					q.remove_at(k)
+					if s.is_player(c):
+						s.log_event(c, "economy", "%s completed in %s." % [b_names[t], world.p_name[p]])
+					continue
+				k += 1
+		# ---- private construction queue (paid from private investment pool, not state budget)
+		var pq: Array = priv_queues[c]
+		if not pq.is_empty():
+			var pproj: Dictionary = pq[0]
+			var pp: int = int(pproj["province"])
+			var pt: int = int(pproj["type"])
+			var inv_c: int = int(pproj.get("investor", c))
+			if world.p_owner[pp] != c or inv_c < 0 or inv_c >= C or alive[inv_c] == 0:
+				pq.remove_at(0)
+			elif inv_pool[inv_c] > 1.0:
+				var pmfill := 1.0
+				var pbg: PackedInt32Array = b_bg_g[pt]
+				var pbq: PackedFloat64Array = b_bg_q[pt]
+				for j in pbg.size():
+					pmfill = minf(pmfill, fill[cg + pbg[j]])
+				var pf := pmfill / BUILD_WEEKS
+				var pcost: float = float(pproj["cost"])
+				var pmoney: float = pcost * pf
+				var pgoods := 0.0
+				for j in pbg.size():
+					pgoods += pbq[j] * pf * mp[cg + pbg[j]]
+				var tot_need := pmoney + pgoods
+				var scale_pay := 1.0
+				if tot_need > inv_pool[inv_c] and tot_need > 0.0:
+					scale_pay = inv_pool[inv_c] / tot_need
+				var actual_spend := tot_need * scale_pay
+				inv_pool[inv_c] = maxf(0.0, inv_pool[inv_c] - actual_spend)
+				inv_outflow[inv_c] += actual_spend
+				pproj["progress"] = float(pproj["progress"]) + pcost * pf * scale_pay
+				var ppb := pp * PC
+				pinc[ppb + P_LABORER] += 0.6 * pmoney * scale_pay
+				pinc[ppb + P_CAPITALIST] += 0.4 * pmoney * scale_pay
+				if float(pproj["progress"]) >= pcost - 1e-6:
+					var bi := pp * B + pt
+					lvl[bi] += 1
+					priv_lvl[bi] = mini(lvl[bi], priv_lvl[bi] + 1)
+					if inv_c != c:
+						for_lvl[bi] = mini(priv_lvl[bi], for_lvl[bi] + 1)
+						for_owner[bi] = inv_c
+						if s.is_player(c) or s.is_player(inv_c):
+							s.log_event(c, "economy", "Foreign capitalists from %s built %s in %s." % [world.c_short[inv_c], b_names[pt], world.p_name[pp]])
+					elif s.is_player(c):
+						s.log_event(c, "economy", "Private sector built %s in %s." % [b_names[pt], world.p_name[pp]])
+					pq.remove_at(0)
 
 
 func _phase_budget(alive: PackedByteArray) -> void:
@@ -1743,10 +1836,14 @@ func price_explanation(c: int, g: int) -> String:
 func buildings_in(p: int) -> Array:
 	var out: Array = []
 	for b in B:
-		var L := lvl[p * B + b]
+		var bi := p * B + b
+		var L := lvl[bi]
 		if L > 0:
-			out.append({"type": b, "name": b_names[b], "level": L, "employed": emp[p * B + b],
-				"workers_needed": L * b_work_total[b], "profit": profit[p * B + b]})
+			var plv := mini(L, priv_lvl[bi]) if b_state[b] == 0 else 0
+			out.append({"type": b, "name": b_names[b], "level": L, "employed": emp[bi],
+				"workers_needed": L * b_work_total[b], "profit": profit[bi],
+				"private_level": plv, "state_level": L - plv,
+				"foreign_level": mini(plv, for_lvl[bi]), "foreign_owner": for_owner[bi]})
 	return out
 
 
@@ -1783,6 +1880,9 @@ func can_build(c: int, p: int, t: int) -> Dictionary:
 	for e: Dictionary in queues[c]:
 		if e["province"] == p and e["type"] == t:
 			queued += 1
+	for pe: Dictionary in priv_queues[c]:
+		if pe["province"] == p and pe["type"] == t:
+			queued += 1
 	if lvl[p * B + t] + queued >= cap[p * B + t]:
 		return {"ok": false, "reason": "Already at the maximum level here (%d)." % cap[p * B + t]}
 	if queues[c].size() >= QUEUE_MAX:
@@ -1807,6 +1907,9 @@ func can_build_fast(c: int, p: int, t: int) -> bool:
 	var queued := 0
 	for e: Dictionary in q:
 		if e["province"] == p and e["type"] == t:
+			queued += 1
+	for pe: Dictionary in priv_queues[c]:
+		if pe["province"] == p and pe["type"] == t:
 			queued += 1
 	return lvl[p * B + t] + queued < cap[p * B + t]
 
@@ -1995,15 +2098,213 @@ func trade_value(c: int) -> float:
 	return trade_vol[c]
 
 
+## True if country c has enacted Free Trade (allowing the player to inspect the private investment pool balance).
+func can_see_investment_pool(c: int) -> bool:
+	if s.politics == null:
+		return true
+	return str(s.politics.law(c, "trade")) == "free_trade"
+
+
+func investment_pool(c: int) -> float:
+	return inv_pool[c]
+
+
+func investment_inflow(c: int) -> float:
+	return inv_inflow[c]
+
+
+func investment_outflow(c: int) -> float:
+	return inv_outflow[c]
+
+
+func private_queue(c: int) -> Array:
+	return priv_queues[c]
+
+
+func is_auto_privatize(c: int) -> bool:
+	return auto_priv[c] == 1
+
+
+func set_auto_privatize(c: int, on: bool) -> void:
+	auto_priv[c] = 1 if on else 0
+
+
+func privatize_price(p: int, t: int) -> float:
+	return _build_cost_at(p, t) * 0.75
+
+
+func _find_privatize_buyer(c: int, price: float) -> int:
+	if inv_pool[c] >= price:
+		return c
+	if s.diplo != null:
+		var best_ally := -1
+		var best_pool := price
+		for a_id in s.diplo.allies(c):
+			var al: int = int(a_id)
+			if al >= 0 and al < C and s.alive[al] != 0 and inv_pool[al] >= best_pool:
+				best_pool = inv_pool[al]
+				best_ally = al
+		return best_ally
+	return -1
+
+
+func can_privatize(c: int, p: int, t: int) -> Dictionary:
+	if t < 0 or t >= B or b_state[t] == 1:
+		return {"ok": false, "reason": "State service buildings cannot be privatized."}
+	if p <= 0 or p >= world.province_count or world.p_owner[p] != c:
+		return {"ok": false, "reason": "You do not own this province."}
+	var bi := p * B + t
+	var st_lv := lvl[bi] - priv_lvl[bi]
+	if st_lv <= 0:
+		return {"ok": false, "reason": "All levels here are already privately owned."}
+	var price := privatize_price(p, t)
+	var buyer := _find_privatize_buyer(c, price)
+	if buyer < 0:
+		return {"ok": false, "reason": "Private capitalists (domestic or allied) need %s in their investment pool to buy this level." % _fmt(price)}
+	return {"ok": true, "reason": "", "price": price, "buyer": buyer}
+
+
+func privatize_building(c: int, p: int, t: int) -> Dictionary:
+	var chk := can_privatize(c, p, t)
+	if not bool(chk["ok"]):
+		return chk
+	var price: float = float(chk["price"])
+	var buyer: int = int(chk["buyer"])
+	var bi := p * B + t
+	inv_pool[buyer] = maxf(0.0, inv_pool[buyer] - price)
+	inv_outflow[buyer] += price
+	tre[c] += price
+	priv_lvl[bi] = mini(lvl[bi], priv_lvl[bi] + 1)
+	if buyer != c:
+		for_lvl[bi] = mini(priv_lvl[bi], for_lvl[bi] + 1)
+		for_owner[bi] = buyer
+		if s.is_player(c) or s.is_player(buyer):
+			s.log_event(c, "economy", "Capitalists from %s bought a state level of %s in %s for £%s." % [world.c_short[buyer], b_names[t], world.p_name[p], _fmt(price)])
+	elif s.is_player(c):
+		s.log_event(c, "economy", "Domestic capitalists privatized %s in %s (+£%s to treasury)." % [b_names[t], world.p_name[p], _fmt(price)])
+	return {"ok": true, "price": price, "buyer": buyer}
+
+
+func _can_build_private_at(host_c: int, p: int, t: int) -> bool:
+	if t < 0 or t >= B or b_state[t] == 1:
+		return false
+	if p <= 0 or p >= world.province_count or world.p_owner[p] != host_c:
+		return false
+	if b_coastal[t] == 1 and world.p_port[p].x < 0.0:
+		return false
+	if not _terrain_ok(t, p) or (b_primary[t] == 1 and tp[p * B + t] < 0.15):
+		return false
+	if b_deposit[t] > 0 and cap[p * B + t] <= 0:
+		return false
+	if b_tech[t] != "" and s.tech != null and not s.tech.building_unlocked(host_c, b_ids[t]):
+		return false
+	var queued := 0
+	for e: Dictionary in queues[host_c]:
+		if e["province"] == p and e["type"] == t:
+			queued += 1
+	for pe: Dictionary in priv_queues[host_c]:
+		if pe["province"] == p and pe["type"] == t:
+			queued += 1
+	return lvl[p * B + t] + queued < cap[p * B + t]
+
+
+func can_invest_foreign(investor: int, p: int, t: int) -> Dictionary:
+	if p <= 0 or p >= world.province_count:
+		return {"ok": false, "reason": "Invalid province."}
+	var host_c: int = world.p_owner[p]
+	if host_c < 0 or host_c == investor:
+		return {"ok": false, "reason": "Must be a foreign province."}
+	if s.diplo == null or not s.diplo.is_allied(investor, host_c):
+		return {"ok": false, "reason": "Foreign investment requires an Alliance with %s." % world.c_short[host_c]}
+	if priv_queues[host_c].size() >= 2:
+		return {"ok": false, "reason": "%s's private construction queue is full." % world.c_short[host_c]}
+	if not _can_build_private_at(host_c, p, t):
+		return {"ok": false, "reason": "Cannot build %s in %s." % [b_names[t], world.p_name[p]]}
+	var cost := _build_cost_at(p, t)
+	if inv_pool[investor] < cost * 0.25:
+		return {"ok": false, "reason": "Private investment pool needs at least £%s (25%% down payment) to start this foreign project." % _fmt(cost * 0.25)}
+	return {"ok": true, "reason": "", "cost": cost}
+
+
+func invest_in_ally(investor: int, p: int, t: int) -> Dictionary:
+	var chk := can_invest_foreign(investor, p, t)
+	if not bool(chk["ok"]):
+		return chk
+	var host_c: int = world.p_owner[p]
+	var cost: float = float(chk["cost"])
+	priv_queues[host_c].append({"province": p, "type": t, "progress": 0.0, "cost": cost, "investor": investor})
+	return {"ok": true, "cost": cost}
+
+
+func tick_month() -> void:
+	## Autonomous capitalist/aristocrat investment: auto-privatization, domestic expansion, and allied foreign investment.
+	var alive: PackedByteArray = s.alive
+	for c in C:
+		if alive[c] == 0:
+			continue
+		# 1. Auto-privatize state levels when enabled (or when AI is in debt)
+		var want_priv: bool = auto_priv[c] == 1 or (not s.is_player(c) and tre[c] < 0.0)
+		if want_priv:
+			var best_p := -1
+			var best_t := -1
+			var best_pr := 0.0
+			for p: int in world.c_provinces[c]:
+				var base := p * B
+				for b in B:
+					if b_state[b] == 0 and lvl[base + b] > priv_lvl[base + b] and profit[base + b] > best_pr:
+						var pr_cost := privatize_price(p, b)
+						if _find_privatize_buyer(c, pr_cost) >= 0:
+							best_pr = profit[base + b]
+							best_p = p
+							best_t = b
+			if best_p > 0 and best_t >= 0:
+				privatize_building(c, best_p, best_t)
+		# 2. Autonomous private construction queue (domestic or in an allied nation)
+		var is_ft: bool = _m_tariff[c] <= 0.001
+		var max_pq: int = 2 if is_ft else 1
+		if inv_pool[c] < 160.0:
+			continue
+		# Try domestic private expansion first if queue has room
+		var best_dom: Dictionary = {"ok": false, "profit": 8.0}
+		if priv_queues[c].size() < max_pq:
+			var cand: Dictionary = best_build_candidate(c, 0)
+			if bool(cand.get("ok", false)) and float(cand["profit"]) > 8.0:
+				var dc_cost := _build_cost_at(int(cand["province"]), int(cand["type"]))
+				if inv_pool[c] >= dc_cost * 0.30:
+					best_dom = cand
+		# Check allied foreign investment opportunities
+		var best_ally_c := -1
+		var best_ally_cand: Dictionary = {"ok": false, "profit": float(best_dom.get("profit", 8.0)) * (1.05 if is_ft else 1.25)}
+		if s.diplo != null and inv_pool[c] >= 260.0:
+			for a_id in s.diplo.allies(c):
+				var al: int = int(a_id)
+				if al >= 0 and al < C and alive[al] != 0 and priv_queues[al].size() < 2:
+					var acand: Dictionary = best_build_candidate(al, 0)
+					if bool(acand.get("ok", false)) and float(acand["profit"]) > float(best_ally_cand["profit"]):
+						var ac_cost := _build_cost_at(int(acand["province"]), int(acand["type"]))
+						if inv_pool[c] >= ac_cost * 0.35 and _can_build_private_at(al, int(acand["province"]), int(acand["type"])):
+							best_ally_cand = acand
+							best_ally_c = al
+		if best_ally_c >= 0 and bool(best_ally_cand.get("ok", false)):
+			var ap: int = int(best_ally_cand["province"])
+			var at: int = int(best_ally_cand["type"])
+			priv_queues[best_ally_c].append({"province": ap, "type": at, "progress": 0.0, "cost": _build_cost_at(ap, at), "investor": c})
+		elif bool(best_dom.get("ok", false)):
+			var dp: int = int(best_dom["province"])
+			var dt: int = int(best_dom["type"])
+			if _can_build_private_at(c, dp, dt):
+				priv_queues[c].append({"province": dp, "type": dt, "progress": 0.0, "cost": _build_cost_at(dp, dt), "investor": c})
+
+
 func on_transfer(p: int, from: int, _to: int) -> void:
 	if from >= 0:
-		var q: Array = queues[from]
-		var k := 0
-		while k < q.size():
-			if q[k]["province"] == p:
-				q.remove_at(k)
-			else:
-				k += 1
+		for q_arr in [queues[from], priv_queues[from]]:
+			var k := 0
+			while k < q_arr.size():
+				if q_arr[k]["province"] == p:
+					q_arr.remove_at(k)
+				else:
+					k += 1
 
 
 # =========================================================================== persistence
@@ -2026,6 +2327,21 @@ func to_dict() -> Dictionary:
 			co.append(e["cost"])
 		qs.append({"p": SimUtil.enc_i32(pr), "t": SimUtil.enc_i32(ty), "g": SimUtil.enc_f64(pg), "c": SimUtil.enc_f64(co)})
 	d["queues"] = qs
+	var pqs: Array = []
+	for c in priv_queues.size():
+		var pr2 := PackedInt32Array()
+		var ty2 := PackedInt32Array()
+		var pg2 := PackedFloat64Array()
+		var co2 := PackedFloat64Array()
+		var iv2 := PackedInt32Array()
+		for pe: Dictionary in priv_queues[c]:
+			pr2.append(pe["province"])
+			ty2.append(pe["type"])
+			pg2.append(pe["progress"])
+			co2.append(pe["cost"])
+			iv2.append(int(pe.get("investor", c)))
+		pqs.append({"p": SimUtil.enc_i32(pr2), "t": SimUtil.enc_i32(ty2), "g": SimUtil.enc_f64(pg2), "c": SimUtil.enc_f64(co2), "i": SimUtil.enc_i32(iv2)})
+	d["priv_queues"] = pqs
 	return d
 
 
@@ -2056,6 +2372,19 @@ func from_dict(d: Dictionary) -> void:
 		for k in pr.size():
 			lst.append({"province": pr[k], "type": ty[k], "progress": pg[k], "cost": co[k]})
 		queues[c] = lst
+	var pqs: Array = d.get("priv_queues", [])
+	for c in priv_queues.size():
+		priv_queues[c] = []
+	for c in mini(pqs.size(), priv_queues.size()):
+		var pr2 := SimUtil.dec_i32(pqs[c]["p"])
+		var ty2 := SimUtil.dec_i32(pqs[c]["t"])
+		var pg2 := SimUtil.dec_f64(pqs[c]["g"])
+		var co2 := SimUtil.dec_f64(pqs[c]["c"])
+		var iv2 := SimUtil.dec_i32(pqs[c].get("i", ""))
+		var plst: Array = []
+		for k in pr2.size():
+			plst.append({"province": pr2[k], "type": ty2[k], "progress": pg2[k], "cost": co2[k], "investor": iv2[k] if k < iv2.size() else c})
+		priv_queues[c] = plst
 	_build_qpc()
 
 

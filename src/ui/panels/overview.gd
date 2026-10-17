@@ -1,5 +1,5 @@
 extends "res://src/ui/panels/panel_base.gd"
-## Overview: headline stats, budget (with tax level control), research, wars, recent events.
+## Overview: headline stats, budget (with tax level control & private investment pool), research, wars, recent events.
 
 const TAX_NAMES := ["Low", "Medium", "High"]
 
@@ -39,6 +39,16 @@ func rebuild() -> void:
 	var bg := K.grid(2, 30, 3)
 	var treasury: float = K.treasury(econ, c)
 	_kv(bg, "Treasury", K.money(treasury), "", K.BAD if treasury < 0.0 else K.INK)
+	if econ.can_see_investment_pool(c):
+		var p_pool: float = econ.investment_pool(c)
+		var p_net: float = econ.investment_inflow(c) - econ.investment_outflow(c)
+		_kv(bg, "Private Investment Pool (Read-only)", "%s (%s/wk)" % [K.money(p_pool), K.signed_money(p_net)],
+			"Private capital accumulated by capitalists and aristocrats (visible under Free Trade). Cannot be spent by the state; funds autonomous private expansion, privatizations, and allied foreign investment.",
+			K.GOLD)
+	else:
+		_kv(bg, "Private Investment Pool", "Hidden (requires Free Trade)",
+			"Enact Free Trade in the Politics tab to inspect the private sector's investment pool balance.",
+			K.DIM)
 	for kv in [["Taxes", "tax", 1.0], ["Tariffs", "tariffs", 1.0], ["Administration", "admin", -1.0], ["Military upkeep", "military", -1.0],
 			["Construction", "construction", -1.0], ["Debt interest", "interest", -1.0]]:
 		var shown: float = absf(float(b.get(kv[1], 0.0))) * kv[2]

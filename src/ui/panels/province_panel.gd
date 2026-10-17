@@ -1,6 +1,7 @@
 extends PanelContainer
-## Selected-province card (right edge): owner, terrain, population by
-## profession, occupation, buildings. Rebuilt on selection change and weekly.
+## Selected-province & selected-country card (right edge):
+## Left-click on map -> Province view (owner, terrain, pops, buildings, Privatize, Allied Foreign Invest).
+## Right-click on map -> Country Overview & Direct Diplomacy popup.
 
 const K := preload("res://src/ui/ui_kit.gd")
 const Biome := preload("res://src/world/biome.gd")
@@ -74,6 +75,7 @@ func refresh() -> void:
 	visible = true
 	var o: int = world.p_owner[p]
 	var me: int = state.player
+	var is_ally: bool = o != me and state.diplo != null and state.diplo.is_allied(me, o)
 	var head := K.hbox(8)
 	head.add_child(K.flag(world.c_color[o], Vector2(30, 22)))
 	var hv := K.vbox(0)
@@ -136,6 +138,10 @@ func refresh() -> void:
 			if int(qe["province"]) == p:
 				var qt: int = int(qe["type"])
 				q_counts[qt] = int(q_counts.get(qt, 0)) + 1
+		for pqe: Dictionary in econ.private_queue(o):
+			if int(pqe["province"]) == p:
+				var pqt: int = int(pqe["type"])
+				q_counts[pqt] = int(q_counts.get(pqt, 0)) + 1
 	if bl.is_empty():
 		_body.add_child(K.lbl("None", 11, K.DIM))
 	for b: Dictionary in bl:
@@ -143,8 +149,15 @@ func refresh() -> void:
 		var bt_id: int = int(b.get("type", 0))
 		var q_add: int = int(q_counts.get(bt_id, 0))
 		var q_str := (" (+%d)" % q_add) if q_add > 0 else ""
-		var row := K.hbox(6)
-		row.add_child(K.lbl("%s  lv %d%s/%d" % [str(b.get("name", "?")), int(b.get("level", 1)), q_str, int(econ.cap[p * econ.B + bt_id])], 12))
+		var plv: int = int(b.get("private_level", 0))
+		var flv: int = int(b.get("foreign_level", 0))
+		var fown: int = int(b.get("foreign_owner", -1))
+		var own_str := ""
+		if plv > 0 and econ.b_state[bt_id] == 0:
+			own_str = " [%dP%s]" % [plv, ("/%d%s" % [flv, world.c_short[fown].left(3)]) if (flv > 0 and fown >= 0) else ""]
+		var row := K.hbox(4)
+		row.add_child(K.lbl("%s  lv %d%s/%d%s" % [str(b.get("name", "?")), int(b.get("level", 1)), q_str, int(econ.cap[p * econ.B + bt_id]), own_str], 11,
+			K.INK, "P = Privately owned levels. Foreign-owned levels remit dividends to the investor nation."))
 		row.add_child(K.spacer())
 		row.add_child(K.lbl(K.signed_money(pf), 11, K.sign_color(pf), "Weekly profit\n" + econ.building_diagnosis(p, bt_id)))
 		if o == me:
@@ -153,8 +166,24 @@ func refresh() -> void:
 				if econ.queue_build(me, p, bt_id):
 					hud.toast("%s queued in %s." % [econ.building_name(bt_id), world.p_name[p]], "ok")
 					hud.refresh_now(), can_exp)
-			eb.custom_minimum_size = Vector2(24, 0)
+			eb.custom_minimum_size = Vector2(22, 0)
 			row.add_child(eb)
+			if econ.b_state[bt_id] == 0 and int(b.get("state_level", 0)) > 0:
+				var pv_chk: Dictionary = econ.can_privatize(me, p, bt_id)
+				var pv_ok: bool = bool(pv_chk.get("ok", false))
+				var pv_p: float = econ.privatize_price(p, bt_id)
+				var pvb := K.btn("$", ("Privatize 1 state level for +%s" % K.money(pv_p)) if pv_ok else str(pv_chk.get("reason", "")),
+					func(): _act(econ.privatize_building(me, p, bt_id), "Privatized 1 level of %s (+%s)." % [econ.building_name(bt_id), K.money(pv_p)]),
+					pv_ok)
+				pvb.custom_minimum_size = Vector2(22, 0)
+				row.add_child(pvb)
+		elif is_ally and econ.b_state[bt_id] == 0:
+			var fchk: Dictionary = econ.can_invest_foreign(me, p, bt_id)
+			var fok: bool = bool(fchk.get("ok", false))
+			var fb := K.btn("+Inv", ("Foreign Invest in %s (from your Private Pool)" % econ.building_name(bt_id)) if fok else str(fchk.get("reason", "")),
+				func(): _act(econ.invest_in_ally(me, p, bt_id), "Private foreign investment queued in %s." % world.p_name[p]),
+				fok)
+			row.add_child(fb)
 		_body.add_child(row)
 	if o == me:
 		var act_row := K.hbox(6)
@@ -172,7 +201,10 @@ func refresh() -> void:
 	else:
 		var f_row := K.hbox(6)
 		f_row.add_child(K.btn("Country & Diplomacy", "View %s overview and diplomatic actions" % world.c_short[o], func(): hud.select_country_requested.emit(o)))
-		f_row.add_child(K.btn("Full Tab...", "Open full Diplomacy tab", func(): hud.open_diplomacy(o)))
+		if is_ally:
+			f_row.add_child(K.btn("Foreign Invest...", "Open Buildings tab to invest in this allied province", func(): hud.open_tab("buildings")))
+		else:
+			f_row.add_child(K.btn("Full Tab...", "Open full Diplomacy tab", func(): hud.open_diplomacy(o)))
 		_body.add_child(f_row)
 	_fit()
 	_scroll.scroll_vertical = sy
@@ -211,12 +243,17 @@ func _refresh_country() -> void:
 	var bat_max: int = int(mil.max_battalions(c))
 	var pwr: float = float(mil.power(c))
 	var mor: int = int(round(float(mil.morale[c]) * 100.0))
+	var priv_txt := "Hidden (requires Free Trade)"
+	if econ.can_see_investment_pool(me) and (c == me or (dip != null and dip.is_allied(me, c))):
+		var p_net: float = econ.investment_inflow(c) - econ.investment_outflow(c)
+		priv_txt = "%s (%s/wk, Read-only)" % [K.money(econ.investment_pool(c)), K.signed_money(p_net)]
 	for kv in [
 			["Capital", "%s (%d provinces)" % [world.p_name[cap] if cap > 0 else "-", world.c_provinces[c].size()]],
 			["Population", "%s  (%d%% jobless)" % [K.num(pops.country_pop(c)), unemp]],
 			["Living / Lit.", "SoL %.1f  |  Literacy %d%%" % [pops.avg_sol(c), lit]],
 			["Politics", "Legit %d  |  Radicals %d%%" % [leg, rad]],
 			["Economy", "GDP %s  |  Treas. %s" % [K.money(econ.gdp(c)), K.money(econ.treasury(c))]],
+			["Private Pool", priv_txt],
 			["Army", "%.0f/%d bat  |  Pwr %.0f (%d%%)" % [bat_cur, bat_max, pwr, mor]]]:
 		g.add_child(K.lbl(kv[0], 11, K.DIM))
 		g.add_child(K.lbl(kv[1], 11))
@@ -251,6 +288,16 @@ func _refresh_country() -> void:
 					if econ.queue_build(me, bp, bt):
 						hud.toast("%s queued in %s." % [econ.building_name(bt), world.p_name[bp]], "ok")
 						hud.refresh_now())))
+		var ap_on: bool = econ.is_auto_privatize(me)
+		var ap_b := _wide(K.btn("Auto-Privatize State Buildings: %s" % ("ON" if ap_on else "OFF"),
+			"Allow domestic and allied capitalists to automatically buy state-owned building levels",
+			func():
+				econ.set_auto_privatize(me, not ap_on)
+				hud.toast("Auto-Privatization %s." % ("enabled" if not ap_on else "disabled"), "ok")
+				hud.refresh_now()))
+		ap_b.toggle_mode = true
+		ap_b.button_pressed = ap_on
+		_body.add_child(ap_b)
 		var qr := K.hbox(4)
 		for tab_pair in [["overview", "Overview"], ["market", "Market"], ["politics", "Politics"], ["military", "Military"]]:
 			var tk: String = tab_pair[0]
@@ -311,6 +358,19 @@ func _refresh_country() -> void:
 		row_pacts.add_child(_wide(K.btn("Trade pact", "Partner markets share surplus goods" if bool(ct["ok"]) else str(ct["reason"]),
 			func(): _act(dip.propose_trade_agreement(me, c), "Trade agreement signed."), bool(ct["ok"]))))
 	ab.add_child(row_pacts)
+
+	# Foreign Investment shortcut when Allied
+	if dip.is_allied(me, c):
+		var acand: Dictionary = econ.best_build_candidate(c, 0)
+		if bool(acand.get("ok", false)):
+			var ap: int = int(acand["province"])
+			var at: int = int(acand["type"])
+			var fchk: Dictionary = econ.can_invest_foreign(me, ap, at)
+			var fok: bool = bool(fchk.get("ok", false))
+			ab.add_child(_wide(K.btn("Foreign Invest: %s in %s" % [econ.building_name(at), world.p_name[ap]],
+				("Queue private foreign investment in %s (%s/wk)" % [world.p_name[ap], K.signed_money(float(acand["profit"]))]) if fok else str(fchk.get("reason", "")),
+				func(): _act(econ.invest_in_ally(me, ap, at), "Private foreign investment queued in %s (%s)." % [world.p_name[ap], world.c_short[c]]),
+				fok)))
 
 	if dip.is_rival(me, c):
 		ab.add_child(_wide(K.btn("Drop rivalry", "End the rivalry", func(): _act(dip.drop_rival(me, c), "Rivalry ended."))))

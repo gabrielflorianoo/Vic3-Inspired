@@ -339,8 +339,14 @@ func update_bar(full: bool) -> void:
 	_bar_treasury.tooltip_text += "\n\n" + econ.budget_explanation(c)
 	_bar_pop.text = "Pop " + K.num(state.pops.country_pop(c))
 	_bar_pop.tooltip_text = "Total population\n" + econ.jobs_explanation(c)
-	_bar_gdp.text = "GDP " + K.money(econ.gdp(c))
-	_bar_gdp.tooltip_text = "Gross domestic product (annual value added)"
+	if econ.can_see_investment_pool(c):
+		var p_pool: float = econ.investment_pool(c)
+		var p_net: float = econ.investment_inflow(c) - econ.investment_outflow(c)
+		_bar_gdp.text = "GDP %s | Priv %s" % [K.money(econ.gdp(c)), K.money(p_pool)]
+		_bar_gdp.tooltip_text = "Gross domestic product (annual value added)\n\nPrivate Investment Pool (Read-only, Free Trade): %s (%s/wk)\nCapitalists and aristocrats reinvest dividends here to autonomously expand buildings, buy privatized state levels, and invest in allied countries." % [K.money(p_pool), K.signed_money(p_net)]
+	else:
+		_bar_gdp.text = "GDP " + K.money(econ.gdp(c))
+		_bar_gdp.tooltip_text = "Gross domestic product (annual value added)\n\nPrivate Investment Pool: Hidden (enact Free Trade in Politics to inspect private capital balance)."
 	var leg: float = state.politics.legitimacy(c)
 	_bar_leg.text = "Legit %d" % int(leg)
 	_bar_leg.add_theme_color_override("font_color", K.GOOD if leg >= 50.0 else (K.WARN if leg >= 25.0 else K.BAD))

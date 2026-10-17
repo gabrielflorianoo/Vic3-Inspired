@@ -169,7 +169,7 @@ func _ordered_modules() -> Array:
 func _build_tick_lists() -> void:
 	_day_calls = _calls("tick_day", [["military", military]])
 	_week_calls = _calls("tick_week", [["pops", pops], ["econ", econ], ["tech", tech], ["military", military], ["diplo", diplo]])
-	_month_calls = _calls("tick_month", [["pops", pops], ["politics", politics], ["diplo", diplo], ["ai", ai]])
+	_month_calls = _calls("tick_month", [["pops", pops], ["econ", econ], ["politics", politics], ["diplo", diplo], ["ai", ai]])
 
 
 func _calls(method: String, mods: Array) -> Array:
