@@ -60,11 +60,15 @@ func focus(world_pos: Vector2, z: float = -1.0) -> void:
 
 
 var _focus_target := Vector2.INF
+var ui_block_fn := Callable()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if mb.pressed and ui_block_fn.is_valid() and bool(ui_block_fn.call(mb.position)):
+			_dragging = false
+			return
 		if mb.pressed and (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN):
 			var f := ZOOM_STEP if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / ZOOM_STEP
 			target_zoom = clampf(target_zoom * f, zoom_min, ZOOM_MAX)

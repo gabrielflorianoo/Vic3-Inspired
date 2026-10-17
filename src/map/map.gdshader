@@ -45,9 +45,7 @@ void fragment() {
 	// Border sample distances in texels: roughly constant on screen.
 	float inv_z = 1.0 / zoom;
 	float w1 = max(0.6, 0.9 * inv_z);
-	float w2 = max(1.6, 2.6 * inv_z);
 	vec2 a = px * w1;
-	vec2 b = px * w2;
 	int n0 = pid(uv + vec2(a.x, 0.0));
 	int n1 = pid(uv - vec2(a.x, 0.0));
 	int n2 = pid(uv + vec2(0.0, a.y));
@@ -58,24 +56,13 @@ void fragment() {
 	if (id == 0) {
 		col = terrain;
 		if (p_edge) {
-			col *= 0.55 * mix(vec3(1.0), vec3(0.62, 0.72, 0.70), 0.18);
-		} else if (detail > 0.5) {
-			int m0 = pid(uv + vec2(b.x, 0.0));
-			int m1 = pid(uv - vec2(b.x, 0.0));
-			int m2 = pid(uv + vec2(0.0, b.y));
-			int m3 = pid(uv - vec2(0.0, b.y));
-			if ((m0 | m1 | m2 | m3) != 0) col = mix(col, vec3(0.62, 0.72, 0.70), 0.18);
-		}
-		if (detail > 0.5 && zoom > 0.6) {
-			float w_fade = min(zoom - 0.6, 1.0);
-			float wave = sin(uv.x * 900.0 + TIME * 0.6 + sin(uv.y * 300.0) * 2.0) * sin(uv.y * 700.0 - TIME * 0.4);
-			col += vec3(0.012, 0.018, 0.022) * (wave * w_fade);
+			col *= 0.58 * mix(vec3(1.0), vec3(0.62, 0.72, 0.70), 0.22);
 		}
 	} else {
 		vec4 own = lk(id, 0);
 		vec4 meta = lk(id, 1);
 		float luma = dot(terrain, vec3(0.299, 0.587, 0.114));
-		if (map_mode == 0) {
+		if (map_mode == 0 || map_mode >= 3) {
 			vec3 pol = own.rgb * (0.38 + 1.05 * luma);
 			col = mix(terrain, pol, own.a * 0.78);
 		} else if (map_mode == 2) {
@@ -96,34 +83,19 @@ void fragment() {
 			}
 		}
 
-		// Country borders: dark outer line + tinted inner band.
-		float me = meta.r;
-		bool c_outer = false;
-		bool coast = false;
+		// Country borders: dark outer line + coast highlight (only evaluated on province edges).
 		if (p_edge) {
-			coast = n0 == 0 || n1 == 0 || n2 == 0 || n3 == 0;
-			c_outer = foreign(n0, id, me) || foreign(n1, id, me) || foreign(n2, id, me) || foreign(n3, id, me);
-		}
-		bool c_inner = false;
-		if (map_mode != 2 && detail > 0.5) {
-			int m0 = pid(uv + vec2(b.x, 0.0));
-			int m1 = pid(uv - vec2(b.x, 0.0));
-			int m2 = pid(uv + vec2(0.0, b.y));
-			int m3 = pid(uv - vec2(0.0, b.y));
-			c_inner = foreign(m0, id, me) || foreign(m1, id, me) || foreign(m2, id, me) || foreign(m3, id, me);
-		}
-
-		if (p_edge) {
+			float me = meta.r;
+			bool coast = n0 == 0 || n1 == 0 || n2 == 0 || n3 == 0;
+			bool c_outer = foreign(n0, id, me) || foreign(n1, id, me) || foreign(n2, id, me) || foreign(n3, id, me);
 			float fade = map_mode == 2 ? 1.0 : smoothstep(0.55, 1.1, zoom);
 			col = mix(col, col * 0.62, 0.8 * fade);
+			if (c_outer) {
+				col = mix(col, own.rgb * 0.45, 0.35);
+				col = mix(col, vec3(0.10, 0.08, 0.07), 0.85);
+			}
+			if (coast) col = mix(col, vec3(0.16, 0.20, 0.22), 0.7);
 		}
-		if (c_inner) {
-			col = mix(col, own.rgb * 0.55, 0.45);
-		}
-		if (c_outer) {
-			col = mix(col, vec3(0.10, 0.08, 0.07), 0.85);
-		}
-		if (coast) col = mix(col, vec3(0.16, 0.20, 0.22), 0.7);
 		if (meta.g > 0.5) {
 			col *= 1.15;
 			if (p_edge) col = vec3(0.98, 0.86, 0.45);

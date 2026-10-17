@@ -230,7 +230,7 @@ func advance_day() -> void:
 		if is_month:
 			_run_profiled(_month_calls, "month")
 			month_index += 1
-		if is_week or is_month or not _day_calls.is_empty():
+		if is_week or is_month or (diplo != null and not diplo.wars.is_empty()):
 			pops.sanitize()
 		return
 	for e: Array in _day_calls:
@@ -242,7 +242,7 @@ func advance_day() -> void:
 		for e: Array in _month_calls:
 			(e[1] as Callable).call()
 		month_index += 1
-	if is_week or is_month or not _day_calls.is_empty():
+	elif not is_week and diplo != null and not diplo.wars.is_empty():
 		pops.sanitize()
 
 

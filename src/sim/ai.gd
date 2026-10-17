@@ -164,33 +164,22 @@ func _good_price(c: int, gid: String) -> float:
 
 
 func _building_score(c: int, t: int) -> float:
-	var b: Dictionary = _buildings[t]
-	if String(b.get("category", "")) in ["infrastructure", "government"]:
+	var econ = s.econ
+	var cat: String = econ.b_cat[t]
+	if cat == "infrastructure" or cat == "government":
 		return 6.0   # state buildings have no market profit; build them at a steady, modest priority
-	var score := 0.0
-	if s.econ.has_method("level_profit"):
-		# Economy-provided expected weekly profit of one level at current prices; inputs must be on the market.
-		for g in b.get("inputs", {}):
-			var gi0: int = _good_idx.get(g, -1)
-			if gi0 >= 0 and float(s.econ.supply(c, gi0)) < float(b["inputs"][g]) * 0.5:
-				return -1.0
-		return float(s.econ.level_profit(c, t)) / maxf(1.0, float(b.get("cost", 100.0))) * 100.0
-	for g in b.get("outputs", {}):
-		score += float(b["outputs"][g]) * _good_price(c, g)
-	for g in b.get("inputs", {}):
-		var q := float(b["inputs"][g])
-		score -= q * _good_price(c, g)
-		# Inputs must exist on the market (or be produced) for the building to run.
-		var gi: int = _good_idx.get(g, -1)
-		if gi >= 0 and s.econ.has_method("supply") and float(s.econ.supply(c, gi)) < q * 0.5:
+	var ig: PackedInt32Array = econ.b_in_g[t]
+	var iq: PackedFloat64Array = econ.b_in_q[t]
+	var cg: int = c * econ.G
+	for j in ig.size():
+		if econ.ms[cg + ig[j]] < iq[j] * 0.5:
 			return -1.0
-	return score / maxf(1.0, float(b.get("cost", 100.0))) * 100.0
+	return float(econ.level_profit(c, t)) / maxf(1.0, econ.b_cost[t]) * 100.0
 
 
 func _construction(c: int) -> void:
-	if s.econ == null or not s.econ.has_method("queue_build") or _buildings.is_empty():
-		return
-	if s.econ.queue(c).size() >= 2:
+	var econ = s.econ
+	if econ == null or econ.queue_size(c) >= 2:
 		return
 	var provs: PackedInt32Array = s.world.c_provinces[c]
 	if provs.is_empty():
@@ -200,16 +189,16 @@ func _construction(c: int) -> void:
 		return
 	# Rank building types by profit per money spent (market prices), then find a province that accepts one.
 	var ranked: Array = []
-	for t in _buildings.size():
-		var b: Dictionary = _buildings[t]
-		if float(b.get("cost", 0.0)) * 1.2 > treasury:
+	var nb: int = econ.B
+	for t in nb:
+		if econ.b_cost[t] * 1.2 > treasury:
 			continue
-		if s.tech != null and not s.tech.building_unlocked(c, String(b.get("id", ""))):
+		if s.tech != null and econ.b_tech[t] != "" and not s.tech.building_unlocked(c, econ.b_ids[t]):
 			continue
 		var sc := _building_score(c, t)
 		if sc <= 0.0:
 			continue
-		if goals[c] == "industrialize" and String(b.get("category", "")) == "secondary":
+		if goals[c] == "industrialize" and econ.b_cat[t] == "secondary":
 			sc *= 1.25
 		ranked.append([sc, t])
 	ranked.sort_custom(func(a, b): return a[0] > b[0] or (a[0] == b[0] and a[1] < b[1]))
@@ -217,8 +206,8 @@ func _construction(c: int) -> void:
 		var t2: int = ranked[k][1]
 		for _try in mini(6, provs.size()):
 			var p: int = provs[s.rng.randi() % provs.size()]
-			if bool(s.econ.can_build(c, p, t2)["ok"]) and s.econ.queue_build(c, p, t2):
-				_note(c, "%s builds %s in %s" % [s.world.c_short[c], String(_buildings[t2].get("name", "?")), s.world.p_name[p]])
+			if econ.can_build_fast(c, p, t2) and econ.queue_build(c, p, t2):
+				_note(c, "%s builds %s in %s" % [s.world.c_short[c], econ.b_names[t2], s.world.p_name[p]])
 				return
 
 

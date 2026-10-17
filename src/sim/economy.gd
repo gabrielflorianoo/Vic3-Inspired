@@ -188,6 +188,12 @@ var qpc := PackedFloat64Array()         # (c*PC+prof)*NN + j  per-capita wants (
 var _gcost := PackedFloat64Array()
 var _gsc := PackedFloat64Array()        # per cohort and need group: share of the basket bought
 var _hh_want := PackedFloat64Array()
+var _p_act := PackedInt32Array()        # p*B active building indices
+var _p_nact := PackedInt32Array()       # p count of active buildings
+var _cp_ns := PackedFloat64Array()
+var _nf_num := PackedFloat64Array()
+var _c_pop := PackedFloat64Array()
+var _mf_fill := PackedFloat64Array()
 
 const PERSIST_F64 := ["mp", "ms", "md", "fill", "sold", "src_flow", "snk_flow", "ref_price", "ref_supply",
 	"ref_demand", "ref_src", "ref_snk", "new_price", "new_supply", "new_demand", "new_src", "new_snk", "extra_demand",
@@ -380,11 +386,18 @@ func _alloc() -> void:
 	_ctl.resize(P); _ctl.fill(-1)
 	_inc.resize(P * PC)
 	_emp.resize(P * PC)
-	_gsc.resize(P * PC * maxi(grp_b.size() - 1, 1))
-	_gcost.resize(C * PC * maxi(grp_b.size() - 1, 1))
+	var ng_cnt := maxi(grp_b.size() - 1, 1)
+	_gsc.resize(P * PC * ng_cnt)
+	_gcost.resize(C * PC * ng_cnt)
+	_cp_ns.resize(C * PC * ng_cnt)
+	_nf_num.resize(C * NN)
+	_c_pop.resize(C)
+	_mf_fill.resize(C * PC * NN)
 	_hh_want.resize(C * NN)
 	_tmp_want.resize(NN)
 	_act.resize(B)
+	_p_act.resize(pb)
+	_p_nact.resize(P); _p_nact.fill(0)
 	for i in cg:
 		mp[i] = good_base[i % G]
 		fill[i] = 1.0
@@ -989,6 +1002,9 @@ func _phase_production(alive: PackedByteArray) -> void:
 					pos -= 1
 				act[pos] = b
 				nact += 1
+		_p_nact[p] = nact
+		for a_i in nact:
+			_p_act[base + a_i] = act[a_i]
 		var rb := 1.0 + rail_bonus[p]
 		var occ := 1.0 if _ctl[p] == c else OCCUPIED_OUTPUT
 		var pool0 := psize[pb]
@@ -1082,9 +1098,8 @@ func _phase_household_demand(alive: PackedByteArray) -> void:
 					cost += qpc[base + j] * mp[cg + n_good[j]]
 				_gcost[(c * PC + prof) * NG + gi] = cost
 	_hh_want.fill(0.0)
-	var cp_ns := PackedFloat64Array()
-	cp_ns.resize(C * PC * NG)
-	cp_ns.fill(0.0)
+	_cp_ns.fill(0.0)
+	var cp_ns := _cp_ns
 	for p in range(1, P):
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
@@ -1247,20 +1262,23 @@ func _phase_settle(alive: PackedByteArray) -> void:
 		var dm := md[i]
 		fill[i] = 1.0 if (dm <= sp or dm <= 0.0) else sp / dm
 		sold[i] = 1.0 if (sp <= dm or sp <= 0.0) else dm / sp
-	# ---- buildings: revenue, wages, dividends
+	# ---- buildings: revenue, wages, dividends (iterate only active buildings)
 	var fw0 := floor_w[0]; var fw1 := floor_w[1]; var fw2 := floor_w[2]; var fw3 := floor_w[3]
+	var p_act := _p_act
+	var p_nact := _p_nact
 	for p in range(1, P):
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
+			continue
+		var nact := p_nact[p]
+		if nact == 0:
 			continue
 		var base := p * B
 		var pb := p * PC
 		var cg := c * G
 		var wmul := _m_wage[c]
-		for b in B:
-			var L := lvl[base + b]
-			if L <= 0:
-				continue
+		for a in nact:
+			var b := p_act[base + a]
 			var bsc := bscale[base + b]
 			var io := bio[base + b]
 			var go := b_out_g[b]
@@ -1333,15 +1351,12 @@ func _phase_settle(alive: PackedByteArray) -> void:
 		bud_mil[c] += pay
 	# ---- consumption: delivered baskets -> standard of living
 	var psol: PackedFloat64Array = pops.sol
-	var nf_num := PackedFloat64Array()
-	nf_num.resize(C * NN)
-	nf_num.fill(0.0)
-	var c_pop := PackedFloat64Array()
-	c_pop.resize(C)
-	c_pop.fill(0.0)
+	_nf_num.fill(0.0)
+	_c_pop.fill(0.0)
+	var nf_num := _nf_num
+	var c_pop := _c_pop
+	var mf_fill := _mf_fill
 	var NG := grp_b.size() - 1
-	var mf_fill := PackedFloat64Array()
-	mf_fill.resize(C * PC * NN)
 	for c in C:
 		if alive[c] == 0:
 			continue
@@ -1366,6 +1381,8 @@ func _phase_settle(alive: PackedByteArray) -> void:
 			var base_m := (c * PC + prof) * NN
 			for gi in NG:
 				var sc := _gsc[gb + gi]
+				if sc <= 0.0:
+					continue
 				for j in range(grp_b[gi], grp_b[gi + 1]):
 					var frac := minf(1.0, mf_fill[base_m + j] * sc)
 					sol_t += need_w[cn + j] * frac
@@ -1382,16 +1399,21 @@ func _phase_settle(alive: PackedByteArray) -> void:
 		else:
 			for j in NN:
 				need_fill[cn + j] = 1.0
-	# ---- hand results to the population
-	pops.employed = _emp.duplicate()
-	pops.income = _inc.duplicate()
+	# ---- hand results to the population (swap buffers to avoid heap allocations)
+	var prev_emp: PackedFloat64Array = pops.employed
+	var prev_inc: PackedFloat64Array = pops.income
+	pops.employed = _emp
+	pops.income = _inc
+	_emp = prev_emp if prev_emp.size() == _emp.size() else _emp.duplicate()
+	_inc = prev_inc if prev_inc.size() == _inc.size() else _inc.duplicate()
 	for c in C:
 		if alive[c] == 0:
 			continue
 		var tb := 0.0
+		var pinc_out: PackedFloat64Array = pops.income
 		for p: int in world.c_provinces[c]:
 			var pb := p * PC
-			tb += _inc[pb] + _inc[pb + 1] + _inc[pb + 2] + _inc[pb + 3] + _inc[pb + 4] + _inc[pb + 5] + _inc[pb + 6]
+			tb += pinc_out[pb] + pinc_out[pb + 1] + pinc_out[pb + 2] + pinc_out[pb + 3] + pinc_out[pb + 4] + pinc_out[pb + 5] + pinc_out[pb + 6]
 		tax_base[c] = tb
 	# ---- prices follow the market balance
 	for i in C * G:
@@ -1405,7 +1427,6 @@ func _state_cost_add(c: int, v: float) -> void:
 
 
 func _phase_construction(alive: PackedByteArray) -> void:
-	var psize: PackedFloat64Array = pops.size
 	var pinc: PackedFloat64Array = pops.income
 	for c in C:
 		bud_con[c] = 0.0
@@ -1769,10 +1790,45 @@ func can_build(c: int, p: int, t: int) -> Dictionary:
 	return {"ok": true, "reason": "", "cost": _build_cost_at(p, t)}
 
 
+func can_build_fast(c: int, p: int, t: int) -> bool:
+	if t < 0 or t >= B or p <= 0 or p >= world.province_count or world.p_owner[p] != c:
+		return false
+	var q: Array = queues[c]
+	if q.size() >= QUEUE_MAX:
+		return false
+	if b_coastal[t] == 1 and world.p_port[p].x < 0.0:
+		return false
+	if not _terrain_ok(t, p) or (b_primary[t] == 1 and tp[p * B + t] < 0.15):
+		return false
+	if b_deposit[t] > 0 and cap[p * B + t] <= 0:
+		return false
+	if b_tech[t] != "" and s.tech != null and not s.tech.building_unlocked(c, b_ids[t]):
+		return false
+	var queued := 0
+	for e: Dictionary in q:
+		if e["province"] == p and e["type"] == t:
+			queued += 1
+	return lvl[p * B + t] + queued < cap[p * B + t]
+
+
+func queue_size(c: int) -> int:
+	return queues[c].size()
+
+
 func queue_build(c: int, p: int, t: int) -> bool:
-	if not can_build(c, p, t)["ok"]:
+	if not can_build_fast(c, p, t):
 		return false
 	queues[c].append({"province": p, "type": t, "progress": 0.0, "cost": _build_cost_at(p, t)})
+	return true
+
+
+func prioritize_build(c: int, i: int) -> bool:
+	var q: Array = queues[c]
+	if i <= 0 or i >= q.size():
+		return false
+	var item: Dictionary = q[i]
+	q.remove_at(i)
+	q.push_front(item)
 	return true
 
 
@@ -1783,6 +1839,89 @@ func cancel_build(c: int, i: int) -> bool:
 	tre[c] += 0.5 * float(q[i]["progress"])
 	q.remove_at(i)
 	return true
+
+
+func good_fill(c: int, g: int) -> float:
+	return fill[c * G + g]
+
+
+func has_input_shortage(c: int, t: int) -> int:
+	var ig: PackedInt32Array = b_in_g[t]
+	var cg := c * G
+	for j in ig.size():
+		var g := ig[j]
+		if md[cg + g] > 0.5 and fill[cg + g] < 0.78:
+			return g
+	return -1
+
+
+func shortage_goods(c: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var cg := c * G
+	for g in G:
+		if md[cg + g] > 1.0 and fill[cg + g] < 0.80:
+			out.append(g)
+	return out
+
+
+func province_gdp(p: int) -> float:
+	if p <= 0 or p >= world.province_count:
+		return 0.0
+	var c: int = world.p_owner[p]
+	if c < 0:
+		return 0.0
+	var base := p * B
+	var cg := c * G
+	var tot := 0.0
+	for b in B:
+		var L := lvl[base + b]
+		if L <= 0:
+			continue
+		if b_state[b] == 1:
+			tot += emp[base + b] * wpw[base + b]
+		else:
+			var go := b_out_g[b]
+			var rev := bout[base + b] * sold[cg + go] * mp[cg + go] if go >= 0 else 0.0
+			var cost_in := 0.0
+			var ig: PackedInt32Array = b_in_g[b]
+			var iq: PackedFloat64Array = b_in_q[b]
+			var bsc := bscale[base + b] * bio[base + b]
+			for j in ig.size():
+				cost_in += iq[j] * bsc * mp[cg + ig[j]]
+			tot += maxf(0.0, rev - cost_in)
+	return tot * 52.0
+
+
+func best_build_candidate(c: int, filter_p: int = -1) -> Dictionary:
+	var provs: PackedInt32Array = PackedInt32Array([filter_p]) if filter_p > 0 else world.c_provinces[c]
+	var best_p := -1
+	var best_t := -1
+	var best_sc := -1e9
+	var best_pf := 0.0
+	for t in B:
+		if b_state[t] == 1:
+			continue
+		if b_tech[t] != "" and s.tech != null and not s.tech.building_unlocked(c, b_ids[t]):
+			continue
+		if has_input_shortage(c, t) >= 0:
+			continue
+		var pf := level_profit(c, t)
+		if pf <= 0.0:
+			continue
+		for p: int in provs:
+			if not can_build_fast(c, p, t):
+				continue
+			var eff := tp[p * B + t] if b_primary[t] == 1 else (1.0 + rail_bonus[p])
+			var cost := _build_cost_at(p, t)
+			var sc := (pf * eff) / maxf(cost, 1.0)
+			if sc > best_sc:
+				best_sc = sc
+				best_p = p
+				best_t = t
+				best_pf = pf * eff
+	if best_p < 0:
+		return {"ok": false}
+	return {"ok": true, "province": best_p, "type": best_t, "profit": best_pf, "cost": _build_cost_at(best_p, best_t)}
 
 
 func queue(c: int) -> Array:

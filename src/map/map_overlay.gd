@@ -128,37 +128,40 @@ func _draw() -> void:
 			_draw_capital(s, is_far)
 	if not show_labels:
 		return
-	# Pass 4: province names.
+	# Pass 4: province names (two-pass shadow + fill for single-atlas batching).
 	if z >= 1.7:
 		var is_11 := z < CLOSE_AT
 		var fs := 11 if is_11 else 13
 		var pw := _p_w11 if is_11 else _p_w13
 		var p_names: PackedStringArray = world.p_name
 		var col := Color(0.97, 0.94, 0.86)
-		var ocol := Color(0.08, 0.06, 0.05, 0.9)
+		var ocol := Color(0.06, 0.05, 0.04, 0.92)
 		var y_off := 16.0 + fs * 0.35
+		var sh_off := Vector2(1.2, 1.2)
 		for id in range(1, n):
 			var s := (anchors[id] - cam_pos) * z + half_size
 			if s.x >= vx0 and s.x <= vx1 and s.y >= vy0 and s.y <= vy1:
 				var pos := Vector2(s.x - pw[id] * 0.5, s.y + y_off)
-				draw_string_outline(_font, pos, p_names[id], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 3, ocol)
+				draw_string(_font, pos + sh_off, p_names[id], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ocol)
 				draw_string(_font, pos, p_names[id], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
-	# Pass 5: country names, fading out as provinces take over.
+	# Pass 5: country names, fading out as provinces take over (quantized font sizes to prevent FreeType atlas thrashing).
 	var alpha := clampf((1.9 - z) / 0.7, 0.0, 1.0)
 	if alpha > 0.0:
 		var c_labels: PackedVector2Array = world.c_label
 		var c_areas: PackedInt32Array = world.c_area
 		var col := Color(1, 0.97, 0.88, alpha)
-		var ocol := Color(0.08, 0.06, 0.05, 0.85 * alpha)
+		var ocol := Color(0.06, 0.05, 0.04, 0.88 * alpha)
 		var gvx0 := -240.0
 		var gvy0 := -240.0
 		var gvx1 := size.x + 240.0
 		var gvy1 := size.y + 240.0
+		var sh_off := Vector2(1.5, 1.5)
 		for c in cn:
 			var s := (c_labels[c] - cam_pos) * z + half_size
 			if s.x < gvx0 or s.x > gvx1 or s.y < gvy0 or s.y > gvy1:
 				continue
-			var fs := int(clampf(sqrt(float(c_areas[c])) * z * 0.075, 11.0, 34.0))
+			var raw_fs := int(clampf(sqrt(float(c_areas[c])) * z * 0.075, 12.0, 32.0))
+			var fs := (raw_fs >> 2) << 2
 			var txt: String = _c_label_txt[c]
 			var key := (c << 8) | fs
 			var w: float = _c_w_cache.get(key, -1.0)
@@ -166,30 +169,31 @@ func _draw() -> void:
 				w = _font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 				_c_w_cache[key] = w
 			var pos := Vector2(s.x - w * 0.5, s.y + fs * 0.35)
-			var outline := maxi(4, fs >> 2)
-			draw_string_outline(_font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, outline, ocol)
+			draw_string(_font, pos + sh_off, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ocol)
 			draw_string(_font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 
-func _label(t: String, p: Vector2, fs: int, col: Color, outline: int, ocol := Color(0.08, 0.06, 0.05, 0.9)) -> void:
+func _label(t: String, p: Vector2, fs: int, col: Color, _outline: int, ocol := Color(0.08, 0.06, 0.05, 0.9)) -> void:
 	var w := _font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var pos := p + Vector2(-w * 0.5, fs * 0.35)
-	draw_string_outline(_font, pos, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, outline, ocol)
+	draw_string(_font, pos + Vector2(1.2, 1.2), t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ocol)
 	draw_string(_font, pos, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 
 func _draw_town(s: Vector2, tier: int, selected: bool) -> void:
-	var r := 2.0 + tier * 0.9
-	draw_circle(s + Vector2(1.5, 2.0), r + 1.0, Color(0, 0, 0, 0.35))
-	draw_circle(s, r + 1.0, Color(0.12, 0.09, 0.07))
-	draw_circle(s, r, Color(0.98, 0.86, 0.45) if selected else Color(0.93, 0.89, 0.80))
+	var r := 2.0 + tier * 0.85
+	var d := r * 2.0
+	var b := d + 2.0
+	draw_rect(Rect2(s.x - r + 0.5, s.y - r + 1.0, b, b), Color(0, 0, 0, 0.35))
+	draw_rect(Rect2(s.x - r - 1.0, s.y - r - 1.0, b, b), Color(0.12, 0.09, 0.07))
+	draw_rect(Rect2(s.x - r, s.y - r, d, d), Color(0.98, 0.86, 0.45) if selected else Color(0.93, 0.89, 0.80))
 
 
 func _draw_port(s: Vector2) -> void:
-	draw_circle(s + Vector2(1, 1.5), 4.5, Color(0, 0, 0, 0.3))
-	draw_circle(s, 4.5, Color(0.13, 0.22, 0.32))
-	draw_line(s + Vector2(0, -2.5), s + Vector2(0, 2.5), Color(0.9, 0.92, 0.95), 1.4)
-	draw_arc(s + Vector2(0, 0.5), 2.4, 0.3, PI - 0.3, 8, Color(0.9, 0.92, 0.95), 1.2)
+	draw_rect(Rect2(s.x - 3.5, s.y - 3.0, 8.0, 8.0), Color(0, 0, 0, 0.3))
+	draw_rect(Rect2(s.x - 4.0, s.y - 4.0, 8.0, 8.0), Color(0.13, 0.22, 0.32))
+	draw_rect(Rect2(s.x - 0.7, s.y - 2.5, 1.4, 5.0), Color(0.9, 0.92, 0.95))
+	draw_rect(Rect2(s.x - 2.5, s.y + 1.0, 5.0, 1.4), Color(0.9, 0.92, 0.95))
 
 
 func _draw_capital(s: Vector2, far: bool) -> void:
@@ -205,22 +209,20 @@ func _draw_capital(s: Vector2, far: bool) -> void:
 	draw_polyline(_cap_pts, Color(0.2, 0.12, 0.05), 1.2)
 
 
-## Pseudo-3D boxes: shadow, side wall, front wall and roof — cheap 2.5D depth.
+## Pseudo-3D boxes: shadow, side wall, front wall and roof — 100% draw_rect for single-call GPU batching.
 func _draw_cluster(id: int, s: Vector2, z: float) -> void:
 	var k := z * 1.25
 	var base := Color(0.80, 0.74, 0.64)
 	var side_col := base.darkened(0.3)
 	var sh_col := Color(0, 0, 0, 0.28)
 	var roof := Color(0.62, 0.30, 0.24) if world.p_tier[id] < 5 else Color(0.36, 0.42, 0.55)
+	var ridge := roof.lightened(0.14)
 	for b in _bld[id]:
 		var p := s + Vector2(b.x, b.y) * k
 		var w := 2.0 * b.z * k
 		var hgt := 1.7 * b.z * k
-		draw_rect(Rect2(p + Vector2(-w * 0.5 + hgt * 0.5, -hgt * 0.2), Vector2(w, hgt * 0.6)), sh_col)
-		draw_rect(Rect2(p + Vector2(-w * 0.5, -hgt), Vector2(w, hgt)), base)
-		draw_rect(Rect2(p + Vector2(w * 0.5, -hgt), Vector2(w * 0.25, hgt)), side_col)
-		_roof_pts[0] = p + Vector2(-w * 0.6, -hgt)
-		_roof_pts[1] = p + Vector2(w * 0.1, -hgt - w * 0.55)
-		_roof_pts[2] = p + Vector2(w * 0.85, -hgt - w * 0.4)
-		_roof_pts[3] = p + Vector2(w * 0.75, -hgt)
-		draw_colored_polygon(_roof_pts, roof)
+		draw_rect(Rect2(p.x - w * 0.5 + hgt * 0.5, p.y - hgt * 0.2, w, hgt * 0.6), sh_col)
+		draw_rect(Rect2(p.x - w * 0.5, p.y - hgt, w, hgt), base)
+		draw_rect(Rect2(p.x + w * 0.5, p.y - hgt, w * 0.25, hgt), side_col)
+		draw_rect(Rect2(p.x - w * 0.55, p.y - hgt - w * 0.42, w * 1.35, w * 0.45), roof)
+		draw_rect(Rect2(p.x - w * 0.45, p.y - hgt - w * 0.52, w * 1.15, w * 0.14), ridge)

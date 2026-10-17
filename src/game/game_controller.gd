@@ -12,10 +12,10 @@ signal events_arrived(events: Array)
 signal player_eliminated
 
 const Settings := preload("res://src/game/settings.gd")
-const BUDGET_MS := 8.0
-const DAYS_PER_SEC := [0.0, 1.0, 3.0, 8.0, 20.0, 1.0e9]
-const SPEED_NAMES := ["Paused", "Speed 1 (1 day/s)", "Speed 2 (3 days/s)", "Speed 3 (8 days/s)", "Speed 4 (20 days/s)", "Speed 5 (maximum)"]
-const MAX_CARRY := 12.0
+const BUDGET_MS := 5.0
+const DAYS_PER_SEC := [0.0, 1.0, 3.0, 8.0, 20.0, 55.0]
+const SPEED_NAMES := ["Paused", "Speed 1 (1 day/s)", "Speed 2 (3 days/s)", "Speed 3 (8 days/s)", "Speed 4 (20 days/s)", "Speed 5 (55 days/s)"]
+const MAX_CARRY := 7.0
 
 var state: RefCounted
 var speed := 0
@@ -50,7 +50,7 @@ func toggle_pause() -> void:
 func _process(delta: float) -> void:
 	if state == null or speed == 0 or blocked or _eliminated:
 		return
-	_credit = minf(_credit + DAYS_PER_SEC[speed] * delta, MAX_CARRY if speed < 5 else 1.0e9)
+	_credit = minf(_credit + DAYS_PER_SEC[speed] * delta, MAX_CARRY)
 	var t0 := Time.get_ticks_usec()
 	var days := 0
 	var week := false
@@ -78,8 +78,6 @@ func _process(delta: float) -> void:
 		# frame: stop right after the first, even if the time budget is not yet spent.
 		if heavy or (Time.get_ticks_usec() - t0) / 1000.0 >= BUDGET_MS:
 			break
-	if speed == 5:
-		_credit = 0.0
 	sim_ms_last = (Time.get_ticks_usec() - t0) / 1000.0
 	if days == 0:
 		return

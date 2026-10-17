@@ -70,6 +70,7 @@ func _ready() -> void:
 	add_child(cam)
 	cam.make_current()
 	cam.setup(Vector2(world.width, world.height))
+	cam.ui_block_fn = _is_mouse_over_ui
 	ui = CanvasLayer.new()
 	add_child(ui)
 	overlay = MapOverlay.new()
@@ -221,6 +222,7 @@ func _start_game(s: RefCounted) -> void:
 	add_child(ctrl)
 	ctrl.setup(state)
 	map_view.controller_fn = state.military.controller
+	map_view.lens_color_fn = _lens_color
 	_controllers = _snapshot_controllers()
 	map_view.refresh_all()
 	hud = GameHud.new()
@@ -251,7 +253,7 @@ func _start_game(s: RefCounted) -> void:
 
 ## Ownership changes (conquest, revolution) and occupation changes re-upload the
 ## small province lookup texture; nothing else on the map is touched.
-func _on_stepped(_days: int, week: bool, _month: bool) -> void:
+func _on_stepped(_days: int, week: bool, month: bool) -> void:
 	if state.ownership_dirty:
 		state.ownership_dirty = false
 		map_view.refresh_all()
@@ -262,6 +264,31 @@ func _on_stepped(_days: int, week: bool, _month: bool) -> void:
 		if state.military != null and state.military.occupier != _controllers:
 			_controllers = state.military.occupier.duplicate()
 			map_view.refresh_all()
+		elif month and map_view.mode >= 3:
+			map_view.refresh_all()
+
+
+func _lens_color(p: int, m: int) -> Color:
+	if state == null or p <= 0:
+		return Color(0.3, 0.3, 0.3)
+	match m:
+		3: # Standard of Living (SoL 5..18 -> red/amber/emerald)
+			var sol: float = state.pops.province_sol(p)
+			var t := clampf((sol - 6.0) / 10.0, 0.0, 1.0)
+			return Color(0.78, 0.25, 0.20).lerp(Color(0.88, 0.76, 0.28), clampf(t * 2.0, 0.0, 1.0)) if t < 0.5 else Color(0.88, 0.76, 0.28).lerp(Color(0.22, 0.78, 0.42), (t - 0.5) * 2.0)
+		4: # Population (50k..1.2M -> cool slate to bright gold/ivory)
+			var pop: float = state.pops.province_pop(p)
+			var t2 := clampf(sqrt(pop / 1000000.0), 0.0, 1.0)
+			return Color(0.22, 0.30, 0.45).lerp(Color(0.95, 0.82, 0.35), t2)
+		5: # GDP / Industry
+			var gdp: float = state.econ.province_gdp(p)
+			var t3 := clampf(sqrt(gdp / 150000.0), 0.0, 1.0)
+			return Color(0.28, 0.26, 0.32).lerp(Color(0.30, 0.85, 0.65), t3)
+		6: # Radicals / Unrest (0%..40% -> calm green to crimson)
+			var rad: float = state.pops.province_radical(p)
+			var t4 := clampf(rad / 0.38, 0.0, 1.0)
+			return Color(0.28, 0.62, 0.38).lerp(Color(0.92, 0.20, 0.18), t4)
+	return world.c_color[world.p_owner[p]]
 
 
 func _snapshot_controllers() -> PackedInt32Array:
@@ -333,12 +360,27 @@ func _select(province: int) -> void:
 		overlay.queue_redraw()
 
 
+var _last_mouse := Vector2(-1, -1)
+
+func _is_mouse_over_ui(pos: Vector2) -> bool:
+	if pause_menu != null and pause_menu.visible:
+		return true
+	if hud != null and hud.mouse_over_ui(pos):
+		return true
+	if pick != null and pick.visible and pick.has_method("mouse_over_ui") and bool(pick.mouse_over_ui(pos)):
+		return true
+	return false
+
+
 func _process(_delta: float) -> void:
+	var mouse := get_viewport().get_mouse_position()
+	if mouse != _last_mouse:
+		_last_mouse = mouse
+		_hover_dirty = true
 	# Picking is one image read; throttle to once per frame and only when needed.
 	if _hover_dirty and not bench.running:
 		_hover_dirty = false
-		var mouse := get_viewport().get_mouse_position()
-		var blocked: bool = (hud != null and hud.mouse_over_ui(mouse)) or (pause_menu != null and pause_menu.visible)
+		var blocked := _is_mouse_over_ui(mouse)
 		var p: int = 0 if blocked else world.province_at(get_global_mouse_position())
 		if p != map_view.hovered_province:
 			map_view.set_hover(p)
@@ -351,14 +393,8 @@ func _process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion:
-		_hover_dirty = true
-		if hud != null:
-			hud.move_tooltip(event.position)
-		elif pick != null:
-			pick.move_tooltip(event.position)
-	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
-		if not cam.is_drag_click() and not bench.running:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		if not _is_mouse_over_ui(event.position) and not cam.is_drag_click() and not bench.running:
 			_select(world.province_at(get_global_mouse_position()))
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var in_game := ctrl != null

@@ -249,6 +249,26 @@ func province_pop(p: int) -> float:
 	return size[b] + size[b + 1] + size[b + 2] + size[b + 3] + size[b + 4] + size[b + 5] + size[b + 6]
 
 
+func province_sol(p: int) -> float:
+	var b := p * PROF_COUNT
+	var s0 := size[b]; var s1 := size[b + 1]; var s2 := size[b + 2]; var s3 := size[b + 3]
+	var s4 := size[b + 4]; var s5 := size[b + 5]; var s6 := size[b + 6]
+	var den := s0 + s1 + s2 + s3 + s4 + s5 + s6
+	if den <= 0.0:
+		return 0.0
+	return (sol[b] * s0 + sol[b + 1] * s1 + sol[b + 2] * s2 + sol[b + 3] * s3 + sol[b + 4] * s4 + sol[b + 5] * s5 + sol[b + 6] * s6) / den
+
+
+func province_radical(p: int) -> float:
+	var b := p * PROF_COUNT
+	var s0 := size[b]; var s1 := size[b + 1]; var s2 := size[b + 2]; var s3 := size[b + 3]
+	var s4 := size[b + 4]; var s5 := size[b + 5]; var s6 := size[b + 6]
+	var den := s0 + s1 + s2 + s3 + s4 + s5 + s6
+	if den <= 0.0:
+		return 0.0
+	return (radicalism[b] * s0 + radicalism[b + 1] * s1 + radicalism[b + 2] * s2 + radicalism[b + 3] * s3 + radicalism[b + 4] * s4 + radicalism[b + 5] * s5 + radicalism[b + 6] * s6) / den
+
+
 func country_pop(c: int) -> float:
 	var t := 0.0
 	for p: int in world.c_provinces[c]:

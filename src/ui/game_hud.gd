@@ -156,7 +156,16 @@ func _build_tabs() -> void:
 		b.add_theme_stylebox_override("normal", K.style(Color(0.12, 0.105, 0.085, 0.94), Color(0.42, 0.35, 0.22), 1, 2, 5))
 		_tab_btns[t[0]] = b
 		_tabs_row.add_child(b)
-	var modes := ["Political", "Terrain", "Provinces"]
+	var modes := ["Political", "Terrain", "Provinces", "SoL", "Pop", "GDP", "Unrest"]
+	var tips := [
+		"Political map (F5)",
+		"Terrain & biomes (F6)",
+		"Province borders (F7)",
+		"Standard of Living heatmap (red = poor, green = prosperous)",
+		"Population density heatmap",
+		"Province GDP / industrial output heatmap",
+		"Radicals & unrest heatmap (green = calm, red = turbulent)"
+	]
 	var grp := ButtonGroup.new()
 	var mrow := K.hbox(3)
 	mrow.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
@@ -164,12 +173,12 @@ func _build_tabs() -> void:
 	mrow.offset_top = TABS_Y
 	mrow.offset_right = -8
 	add_child(mrow)
-	for i in 3:
-		var b := K.btn(modes[i], "Map mode (F%d)" % (5 + i), map_mode_requested.emit.bind(i))
+	for i in modes.size():
+		var b := K.btn(modes[i], tips[i], map_mode_requested.emit.bind(i))
 		b.toggle_mode = true
 		b.button_group = grp
 		b.button_pressed = i == 0
-		b.add_theme_font_size_override("font_size", 12)
+		b.add_theme_font_size_override("font_size", 11)
 		_mode_btns.append(b)
 		mrow.add_child(b)
 
@@ -275,13 +284,14 @@ func mouse_over_ui(pos: Vector2) -> bool:
 		return true
 	if _province_panel.visible and _province_panel.get_global_rect().has_point(pos):
 		return true
-	return pos.x > size.x - 240 and pos.y < TABS_Y + 28
+	return pos.x > size.x - 420 and pos.y < TABS_Y + 28
 
 
 # --------------------------------------------------------------- top bar
 
 var _last_fit_w := -1.0
 var _last_bar_day := -1
+var _last_bar_msec := -10000
 
 ## Keeps the Menu button on screen at any window size / UI scale: lowest-priority stats are hidden
 ## (their numbers live in the Overview panel) until the whole row fits.
@@ -304,11 +314,17 @@ func update_bar(full: bool) -> void:
 	if not full:
 		return
 	_last_bar_day = state.day
-	var np: int = state.diplo.proposals_for(state.player).size()
-	_tab_btns["diplomacy"].text = "Diplomacy (%d)" % np if np > 0 else "Diplomacy"
-	_tab_btns["diplomacy"].add_theme_color_override("font_color", K.WARN if np > 0 else K.INK)
+	_last_bar_msec = Time.get_ticks_msec()
 	var c: int = state.player
 	var econ = state.econ
+	var np: int = state.diplo.proposals_for(c).size()
+	_tab_btns["diplomacy"].text = "Diplomacy (%d)" % np if np > 0 else "Diplomacy"
+	_tab_btns["diplomacy"].add_theme_color_override("font_color", K.WARN if np > 0 else K.INK)
+	var sh_cnt: int = econ.shortage_goods(c).size()
+	_tab_btns["market"].text = "Market (!%d)" % sh_cnt if sh_cnt > 0 else "Market"
+	_tab_btns["market"].add_theme_color_override("font_color", K.BAD if sh_cnt > 0 else K.INK)
+	var q_sz: int = econ.queue_size(c)
+	_tab_btns["buildings"].text = "Buildings (%d)" % q_sz if q_sz > 0 else "Buildings"
 	var bud: Dictionary = econ.budget(c)
 	var bal: float = float(bud.get("balance", 0.0))
 	var tr: float = K.treasury(econ, c)
@@ -348,13 +364,19 @@ func _on_speed_changed(speed: int) -> void:
 
 
 func set_mode_button(m: int) -> void:
-	_mode_btns[m].set_pressed_no_signal(true)
+	if m >= 0 and m < _mode_btns.size():
+		_mode_btns[m].set_pressed_no_signal(true)
 
 
 # ---------------------------------------------------------- stepping hooks
 
 func _on_stepped(_days: int, week: bool, month: bool) -> void:
-	update_bar(week or month)
+	var fast: bool = ctrl != null and int(ctrl.speed) >= 4
+	if week or month:
+		var now_ms := Time.get_ticks_msec()
+		update_bar(not fast or (now_ms - _last_bar_msec >= 220))
+	elif not fast or (int(state.day) & 1) == 0:
+		_bar_date.text = state.date_string()
 	if week:
 		_record_prices()
 		_dirty = true
@@ -420,6 +442,7 @@ func toast(text: String, kind := "system") -> void:
 # ------------------------------------------------------------------- tabs
 
 func open_tab(tab: String) -> void:
+	hide_tooltip()
 	if tab == current_tab:
 		close_tab()
 		return
@@ -480,25 +503,36 @@ func focus_province(p: int) -> void:
 	focus_requested.emit(world.p_anchor[p])
 
 
+var _refresh_pending := false
+
 ## Re-render open panels immediately (after a user action).
 func refresh_now() -> void:
+	if not _refresh_pending:
+		_refresh_pending = true
+		_do_refresh_now.call_deferred()
+
+
+func _do_refresh_now() -> void:
+	_refresh_pending = false
 	_dirty = false
 	_last_refresh = Time.get_ticks_msec() / 1000.0
 	if _last_bar_day != state.day:
 		update_bar(true)
 	if _panel != null:
+		var sy: int = _scroll.scroll_vertical
 		_panel.refresh()
-		_fit_host.call_deferred()
+		_fit_host()
+		_scroll.scroll_vertical = sy
 	if _province_panel.visible:
 		_province_panel.refresh()
 
 
 func _process(_delta: float) -> void:
-	if _dirty:
+	if _dirty and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		var now := Time.get_ticks_msec() / 1000.0
 		var min_interval := 1.0 if (ctrl != null and ctrl.speed >= 4) else REFRESH_MIN
 		if now - _last_refresh >= min_interval:
-			refresh_now()
+			_do_refresh_now()
 
 
 # --------------------------------------------------- selection and tooltips
@@ -519,7 +553,11 @@ func show_tooltip(province: int, at: Vector2) -> void:
 	var txt := "%s\n%s" % [world.p_name[province], world.c_name[o] if o >= 0 else "Unclaimed"]
 	txt += "\n%s - %s%s" % [Biome.NAMES[world.p_terrain[province]], TIERS[world.p_tier[province]], " - Port" if world.p_port[province].x >= 0 else ""]
 	if o >= 0:
-		txt += "\nPopulation %s" % K.num(state.pops.province_pop(province))
+		var pop: float = state.pops.province_pop(province)
+		var sol: float = state.pops.province_sol(province)
+		var rad: float = state.pops.province_radical(province)
+		var gdp: float = state.econ.province_gdp(province)
+		txt += "\nPop %s  |  SoL %.1f  |  Rad %d%%  |  GDP %s" % [K.num(pop), sol, int(round(rad * 100.0)), K.money(gdp)]
 		var ctl: int = state.military.controller(province)
 		if ctl != o and ctl >= 0:
 			txt += "\nOccupied by %s" % world.c_short[ctl]

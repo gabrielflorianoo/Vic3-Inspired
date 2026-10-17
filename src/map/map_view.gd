@@ -3,7 +3,7 @@ extends Sprite2D
 ## Per-province visual state is pushed into a (N x 2) lookup texture only when
 ## selection, hover or ownership changes — never per frame.
 
-enum Mode { POLITICAL, TERRAIN, PROVINCES }
+enum Mode { POLITICAL, TERRAIN, PROVINCES, SOL, POPULATION, GDP, RADICALS }
 
 var world: RefCounted
 var mode: int = Mode.POLITICAL
@@ -13,6 +13,8 @@ var hovered_province := 0
 ## Optional (province:int) -> controlling country. Differs from the owner while
 ## a province is occupied; those provinces are drawn with diagonal stripes.
 var controller_fn := Callable()
+## Optional (province:int, mode:int) -> Color for heatmap lenses (modes >= 3).
+var lens_color_fn := Callable()
 
 var _lookup_img: Image
 var _lookup_tex: ImageTexture
@@ -53,8 +55,12 @@ func _write(id: int) -> void:
 	var o: int = world.p_owner[id] if id > 0 else -1
 	var c := Color(0, 0, 0, 0)
 	if o >= 0:
-		c = world.c_color[o]
-		c.a = 1.0
+		if mode >= Mode.SOL and lens_color_fn.is_valid():
+			c = lens_color_fn.call(id, mode)
+			c.a = 1.0
+		else:
+			c = world.c_color[o]
+			c.a = 1.0
 	_lookup_img.set_pixel(id, 0, c)
 	_lookup_img.set_pixel(id, 1, Color8(o + 1, 255 if id == selected_province and id > 0 else 0,
 		255 if id == hovered_province and id > 0 else 0, 255 if o >= 0 and o == selected_country else 0))
@@ -76,8 +82,13 @@ func _write_meta(id: int) -> void:
 
 
 func set_mode(m: int) -> void:
+	var was_lens := mode >= Mode.SOL
+	var is_lens := m >= Mode.SOL
 	mode = m
-	_mat.set_shader_parameter("map_mode", mode)
+	if was_lens or is_lens:
+		refresh_all()
+	else:
+		_mat.set_shader_parameter("map_mode", mode)
 
 
 func set_zoom(z: float) -> void:
