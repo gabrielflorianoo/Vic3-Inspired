@@ -204,7 +204,7 @@ func _refresh_country() -> void:
 	# Country overview stats
 	var g := K.grid(2, 12, 2)
 	var unemp: int = int(round(pops.unemployment(c) * 100.0))
-	var lit: int = int(round(pops.literacy_rate(c) * 100.0))
+	var lit: int = int(round(pops.literacy_of(c) * 100.0))
 	var rad: int = int(round(pops.radical_share(c) * 100.0))
 	var leg: int = int(state.politics.legitimacy(c))
 	var bat_cur: float = float(mil.bat[c])
