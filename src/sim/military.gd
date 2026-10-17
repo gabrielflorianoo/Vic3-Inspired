@@ -31,8 +31,10 @@ var battles := 0
 var recent: Array = []                  # [{day, text}] last 30 battle reports
 var _fill_cache := PackedFloat32Array()
 var posture := PackedByteArray()        # per country: 0 defensive, 1 balanced, 2 offensive
+var focus_enemy := PackedInt32Array()   # per country: enemy country ID where troops are concentrated (-1 = spread evenly)
 var live: Dictionary = {}               # attacked province -> running battle {w, side, x, y, src, oa, od, wk, dig, ratio, f}
 var _load := PackedFloat32Array()       # per country: battles it is committed to this week
+var war_hist: Dictionary = {}           # war_id -> PackedFloat32Array of attacker warscore history (up to 26 weeks)
 
 
 func setup(state) -> void:
@@ -43,7 +45,9 @@ func setup(state) -> void:
 	occupier.fill(-1)
 	siege = {}; recent = []; battles = 0
 	posture.resize(_n); posture.fill(1)
+	focus_enemy.resize(_n); focus_enemy.fill(-1)
 	live = {}
+	war_hist = {}
 	_load.resize(_n)
 	var tot := 0.0
 	for c in _n:
@@ -64,10 +68,13 @@ func to_dict() -> Dictionary:
 	var sg := []
 	for p in siege:
 		sg.append([int(p), int(siege[p]["by"]), SimUtil.num_str(float(siege[p]["prog"]))])
+	var wh := {}
+	for wid in war_hist:
+		wh[str(wid)] = SimUtil.enc_f32(war_hist[wid])
 	return {"bs": SimUtil.num_str(batt_size), "bat": SimUtil.enc_f32(bat), "est": SimUtil.enc_f32(est),
 		"mor": SimUtil.enc_f32(morale), "occ": Array(occupier),
 		"siege": sg, "cas": SimUtil.enc_f32(casualties), "battles": battles, "recent": recent.duplicate(true),
-		"post": Array(posture), "fl": _live_to_array()}
+		"post": Array(posture), "foc": Array(focus_enemy), "wh": wh, "fl": _live_to_array()}
 
 
 func from_dict(d: Dictionary) -> void:
@@ -101,6 +108,17 @@ func from_dict(d: Dictionary) -> void:
 	if pa_arr.size() == _n:
 		for i in _n:
 			posture[i] = clampi(int(pa_arr[i]), 0, 2)
+	focus_enemy = PackedInt32Array()
+	focus_enemy.resize(_n)
+	focus_enemy.fill(-1)
+	var fe_arr: Array = d.get("foc", [])
+	if fe_arr.size() == _n:
+		for i in _n:
+			focus_enemy[i] = int(fe_arr[i])
+	war_hist = {}
+	var wh_d: Dictionary = d.get("wh", {})
+	for k in wh_d:
+		war_hist[int(k)] = SimUtil.dec_f32(str(wh_d[k]))
 	live = {}
 	for e in d.get("fl", []):
 		live[int(e[0])] = {"w": int(e[1]), "side": int(e[2]), "x": int(e[3]), "y": int(e[4]), "src": int(e[5]),
@@ -183,12 +201,34 @@ func arms_demand(c: int) -> float:
 	return bat[c] * batt_size / 1000.0 * ARMS_PER_1000 * (1.5 * float(POST_COST[posture[c]]) if at_war(c) else 1.0)
 
 
+func preview_recruit_impact(c: int, n: int) -> String:
+	var room := max_battalions(c) - int(ceil(est[c]))
+	var k := maxi(0, mini(n, room))
+	var mult := 1.25 * float(POST_COST[posture[c]]) if at_war(c) else 1.0
+	var amult := 1.5 * float(POST_COST[posture[c]]) if at_war(c) else 1.0
+	var d_upk := float(n) * batt_size * UPKEEP_PER_MAN * mult
+	var d_arms := float(n) * batt_size / 1000.0 * ARMS_PER_1000 * amult
+	var mor_drop := int(round(0.03 * float(k) * 100.0))
+	return "Raise %d battalion(s) (%d men).\nImpact: -£%.0f/wk upkeep, +%.1f Arms/wk demand, -%d%% initial morale (raw recruits)." % [
+		n, int(float(n) * batt_size), d_upk, d_arms, mor_drop]
+
+
+func preview_disband_impact(c: int, n: int) -> String:
+	var k := minf(float(n), bat[c])
+	var mult := 1.25 * float(POST_COST[posture[c]]) if at_war(c) else 1.0
+	var amult := 1.5 * float(POST_COST[posture[c]]) if at_war(c) else 1.0
+	var d_upk := k * batt_size * UPKEEP_PER_MAN * mult
+	var d_arms := k * batt_size / 1000.0 * ARMS_PER_1000 * amult
+	return "Release %d battalion(s).\nImpact: saves +£%.0f/wk upkeep and reduces Arms demand by -%.1f/wk." % [int(k), d_upk, d_arms]
+
+
 func power_breakdown(c: int) -> Array:
 	var out: Array = [{"reason": "Battalions in the field", "value": bat[c]}]
 	var fill := equipment_fill(c)
 	out.append({"reason": "Equipment (arms supply %d%%)" % int(fill * 100.0), "value": 0.4 + 0.6 * fill, "mult": true})
-	out.append({"reason": "Morale", "value": morale[c], "mult": true})
+	out.append({"reason": "Morale / Organisation", "value": morale[c], "mult": true})
 	out.append({"reason": "Military technology", "value": 1.0 + _tech_mod(c, "army_power"), "mult": true})
+	out.append({"reason": "Posture (%s)" % POST_NAMES[posture[c]], "value": POST_ATK[posture[c]], "mult": true})
 	return out
 
 
@@ -198,7 +238,8 @@ func power(c: int) -> float:
 
 func army(c: int) -> Dictionary:
 	return {"battalions": battalions(c), "manpower": manpower(c), "equipment": equipment_fill(c), "morale": morale[c],
-		"upkeep": upkeep(c), "power": power(c), "men": int(bat[c] * batt_size), "establishment": est[c], "max": max_battalions(c)}
+		"upkeep": upkeep(c), "power": power(c), "men": int(bat[c] * batt_size), "establishment": est[c], "max": max_battalions(c),
+		"casualties": casualties[c], "focus": focus_enemy[c]}
 
 
 func recruit(c: int, n: int) -> Dictionary:
@@ -225,7 +266,7 @@ func disband(c: int, n: int) -> Dictionary:
 	return {"ok": true, "reason": "Disbanded %d battalions." % int(k)}
 
 
-# --------------------------------------------------------------------------- control of provinces
+# --------------------------------------------------------------------------- control of provinces & supply
 func controller(p: int) -> int:
 	if p <= 0 or p >= occupier.size():
 		return s.world.p_owner[p] if p >= 0 and p < s.world.province_count else -1
@@ -256,6 +297,53 @@ func border_provinces(a: int, b: int) -> Array:
 	return s.diplo.border_provinces_of(b, a)
 
 
+## True if province `src` has a contiguous land path of provinces controlled by `c` (or war allies) back to `c`'s capital (or any core province).
+func has_supply_line(c: int, src: int, war_allies: Array = []) -> bool:
+	if src <= 0:
+		return false
+	if s.world.p_owner[src] == c and controller(src) == c:
+		return true
+	var cap_p: int = s.world.c_capital[c]
+	if cap_p <= 0 or controller(cap_p) != c:
+		# Fallback: check if adjacent to any homeland province controlled by c
+		for n in s.world.p_neighbors[src]:
+			if s.world.p_owner[n] == c and controller(n) == c:
+				return true
+	var visited := {src: true}
+	var queue: Array = [src]
+	var head := 0
+	while head < queue.size() and head < 48:
+		var cur: int = queue[head]
+		head += 1
+		if s.world.p_owner[cur] == c and controller(cur) == c:
+			return true
+		for nb in s.world.p_neighbors[cur]:
+			if nb > 0 and not visited.has(nb):
+				var ctl := controller(nb)
+				if ctl == c or war_allies.has(ctl):
+					visited[nb] = true
+					queue.append(nb)
+	return false
+
+
+## Calculates the logistics & supply efficiency (0.45..1.25) for country `c` operating from `src` into `target_p`.
+func supply_efficiency(c: int, src: int, target_p: int, wk: int = 0, war_allies: Array = []) -> float:
+	var deep: bool = s.world.p_owner[target_p] != c
+	if deep:
+		for n in s.world.p_neighbors[target_p]:
+			if s.world.p_owner[n] == c:
+				deep = false
+				break
+	var connected := has_supply_line(c, src, war_allies)
+	var base_sup := 1.0 if not deep else (0.88 if connected else 0.62)
+	var cap_p: int = s.world.c_capital[c]
+	if cap_p > 0 and controller(cap_p) != c:
+		base_sup -= 0.12 # Capital occupied: national logistics disrupted
+	var rail_b := 0.04 * minf(3.0, float(_railway_level(src)))
+	var camp_wear := 0.012 * float(wk)
+	return clampf(base_sup + rail_b - camp_wear, 0.45, 1.25)
+
+
 func fronts(war_id: int) -> Array:
 	## [{attacker, defender, provinces:[...]}] per bordering attacker/defender pair.
 	var out := []
@@ -271,6 +359,147 @@ func fronts(war_id: int) -> Array:
 	return out
 
 
+## Detailed strategic fronts for country `c` across all active wars, with relative power, supply, terrain, threatened provinces, and status reason.
+func fronts_of_country(c: int) -> Array:
+	var out: Array = []
+	if s.diplo == null:
+		return out
+	for w: Dictionary in s.diplo.wars_of(c):
+		var wid: int = int(w["id"])
+		var is_att: bool = (w["attackers"] as Array).has(c)
+		var allies: Array = w["attackers"] if is_att else w["defenders"]
+		var foes: Array = w["defenders"] if is_att else w["attackers"]
+		for foe_v in foes:
+			var foe: int = int(foe_v)
+			if not s.alive[foe]:
+				continue
+			var border_theirs: Array = []
+			var border_ours: Array = []
+			for p in s.world.c_provinces[foe]:
+				for nb in s.world.p_neighbors[p]:
+					if nb > 0 and allies.has(controller(nb)):
+						border_theirs.append(p)
+						break
+			for p in s.world.c_provinces[c]:
+				for nb in s.world.p_neighbors[p]:
+					if nb > 0 and foes.has(controller(nb)):
+						border_ours.append(p)
+						break
+			var active_bt: Array = []
+			for q: int in live.keys():
+				var bt: Dictionary = live[q]
+				if int(bt["w"]) == wid and ((int(bt["x"]) == c and int(bt["y"]) == foe) or (int(bt["x"]) == foe and int(bt["y"]) == c)):
+					active_bt.append(q)
+			if border_theirs.is_empty() and border_ours.is_empty() and active_bt.is_empty():
+				continue
+			var my_pwr := power(c) * (1.20 if focus_enemy[c] == foe else 1.0)
+			var foe_pwr := power(foe) * (1.20 if focus_enemy[foe] == c else 1.0)
+			var ratio := my_pwr / maxf(foe_pwr, 0.1)
+			var sample_p: int = int(border_ours[0]) if not border_ours.is_empty() else (int(border_theirs[0]) if not border_theirs.is_empty() else s.world.c_capital[c])
+			var sup := supply_efficiency(c, sample_p, sample_p, 0, allies)
+			var avg_terr := 1.0
+			var t_cnt := 0
+			for tp_id in border_theirs:
+				avg_terr += _terrain_def(int(tp_id)) - 1.0
+				t_cnt += 1
+			if t_cnt > 0:
+				avg_terr = 1.0 + (avg_terr - 1.0) / float(t_cnt)
+			var status := "Stagnant"
+			var why := ""
+			if ratio > 1.22 and posture[c] > 0:
+				status = "Advancing"
+				why = "Superior force (%.0f vs %.0f pwr) and %s posture allow offensive pushes." % [my_pwr, foe_pwr, POST_NAMES[posture[c]]]
+			elif ratio < 0.82:
+				status = "Losing ground"
+				why = "Outmatched on this front (%.0f vs %.0f pwr); %d home province(s) threatened." % [my_pwr, foe_pwr, border_ours.size()]
+			else:
+				status = "Holding line" if posture[c] == 0 else "Contested"
+				why = "Forces evenly matched (%.0f vs %.0f pwr) across %s terrain (x%.2f defense)." % [my_pwr, foe_pwr, "rugged" if avg_terr > 1.15 else "open", avg_terr]
+			if equipment_fill(c) < 0.75:
+				why += " Arms shortage (%d%%) weakens our troops." % int(round(equipment_fill(c) * 100.0))
+			if sup < 0.85:
+				why += " Extended/disrupted supply lines (%d%%)." % int(round(sup * 100.0))
+			out.append({
+				"war_id": wid, "enemy": foe, "enemy_name": s.world.c_short[foe],
+				"my_power": my_pwr, "enemy_power": foe_pwr, "ratio": ratio,
+				"supply": sup, "terrain_def": avg_terr,
+				"threatened": border_ours, "targets": border_theirs, "battles": active_bt,
+				"focused": focus_enemy[c] == foe,
+				"status": status, "explanation": why
+			})
+	return out
+
+
+func front_alerts(c: int) -> Array:
+	var alerts: Array = []
+	for f: Dictionary in fronts_of_country(c):
+		var ratio: float = float(f["ratio"])
+		var thr: Array = f["threatened"]
+		var sup: float = float(f["supply"])
+		if ratio < 0.78 and not thr.is_empty():
+			var p0: int = int(thr[0])
+			alerts.append({
+				"id": "front_risk_%d" % int(f["enemy"]), "severity": "critical", "tab": "military", "province": p0,
+				"label": "! Front Risk vs %s" % str(f["enemy_name"]),
+				"problem": "Front against %s is outnumbered (%.0f vs %.0f power); %s is threatened." % [
+					str(f["enemy_name"]), float(f["my_power"]), float(f["enemy_power"]), s.world.p_name[p0]],
+				"cause": str(f["explanation"]),
+				"action": "Switch to Defensive posture, Focus Front against %s, or recruit battalions in Military." % str(f["enemy_name"])
+			})
+		elif sup < 0.78:
+			alerts.append({
+				"id": "supply_risk_%d" % int(f["enemy"]), "severity": "warning", "tab": "military",
+				"label": "! Low Supply vs %s (%d%%)" % [str(f["enemy_name"]), int(round(sup * 100.0))],
+				"problem": "Troops fighting %s have poor supply efficiency (%d%%)." % [str(f["enemy_name"]), int(round(sup * 100.0))],
+				"cause": "Deep advance into hostile territory or disrupted connection to capital; low railway level.",
+				"action": "Build Railways in border provinces or consolidate forces."
+			})
+	return alerts
+
+
+func set_focus_enemy(c: int, enemy: int) -> Dictionary:
+	if c < 0 or c >= _n:
+		return {"ok": false, "reason": "Invalid country."}
+	if focus_enemy[c] == enemy:
+		focus_enemy[c] = -1
+		return {"ok": true, "reason": "Troops distributed evenly across all fronts."}
+	focus_enemy[c] = enemy
+	return {"ok": true, "reason": "Concentrated main army effort on the %s front (+20%% combat commitment there)." % (s.world.c_short[enemy] if enemy >= 0 else "all")}
+
+
+func get_focus_enemy(c: int) -> int:
+	return focus_enemy[c] if c >= 0 and c < focus_enemy.size() else -1
+
+
+## Order an immediate tactical withdrawal from unfavourable offensive battles against `enemy` (or all enemies if -1) to preserve manpower & organisation.
+func retreat_front(c: int, enemy: int = -1) -> Dictionary:
+	var withdrawn := 0
+	for q: int in live.keys():
+		var b: Dictionary = live[q]
+		if int(b["x"]) == c and (enemy < 0 or int(b["y"]) == enemy):
+			live.erase(q)
+			withdrawn += 1
+	posture[c] = 0 # Switch to Defensive to hold home ground and recover organisation
+	morale[c] = clampf(morale[c] + 0.04, 0.2, 1.0)
+	if withdrawn > 0:
+		return {"ok": true, "reason": "Withdrew from %d offensive battle(s) and adopted Defensive posture to regroup." % withdrawn}
+	return {"ok": true, "reason": "Adopted Defensive posture to hold the line and recover organisation."}
+
+
+func war_score_history(war_id: int, for_country: int) -> PackedFloat32Array:
+	var raw: PackedFloat32Array = war_hist.get(war_id, PackedFloat32Array())
+	if raw.is_empty() or s.diplo == null:
+		return raw
+	var w: Dictionary = s.diplo.war_by_id(war_id)
+	if w.is_empty() or (w["attackers"] as Array).has(for_country):
+		return raw
+	var inv := PackedFloat32Array()
+	inv.resize(raw.size())
+	for i in raw.size():
+		inv[i] = -raw[i]
+	return inv
+
+
 func on_transfer(p: int, _from: int, _to: int) -> void:
 	if p > 0 and p < occupier.size():
 		occupier[p] = -1
@@ -278,8 +507,10 @@ func on_transfer(p: int, _from: int, _to: int) -> void:
 		live.erase(p)
 
 
-func on_war_ended(_w: Dictionary) -> void:
+func on_war_ended(w: Dictionary) -> void:
 	## Called by diplomacy after the war was removed: release occupations that are no longer justified.
+	if w.has("id"):
+		war_hist.erase(int(w["id"]))
 	_release_invalid()
 
 
@@ -306,17 +537,32 @@ func tick_week() -> void:
 	for w: Dictionary in wars:
 		for x in w["attackers"]: at_w[x] = 1
 		for x in w["defenders"]: at_w[x] = 1
+		var wid: int = int(w["id"])
+		var wh: PackedFloat32Array = war_hist.get(wid, PackedFloat32Array())
+		if wh.size() >= 26:
+			wh.remove_at(0)
+		wh.append(float(w.get("warscore", 0.0)))
+		war_hist[wid] = wh
 	_drop_dead_battles()
 	for c in _n:
 		if not s.alive[c]:
 			continue
-		# Morale recovers (slower at war); battalions refill toward establishment from the manpower pool.
-		morale[c] = minf(1.0, morale[c] + (0.006 if at_w[c] == 1 else 0.03))
+		if at_w[c] == 0:
+			focus_enemy[c] = -1
+		elif focus_enemy[c] >= 0 and not s.diplo.at_war(c, focus_enemy[c]):
+			focus_enemy[c] = -1
+		# Morale / organisation recovers faster in Defensive posture and when well supplied with Arms.
+		var eq_f := equipment_fill(c)
+		var rec_base := (0.012 if posture[c] == 0 else 0.006) if at_w[c] == 1 else 0.035
+		morale[c] = clampf(morale[c] + rec_base * (0.5 + 0.5 * eq_f), 0.15, 1.0)
 		var maxb := float(max_battalions(c))
 		est[c] = minf(est[c], maxb) if est[c] > maxb + 1.0 else est[c]
 		if bat[c] < est[c]:
 			# Replacements need rifles and artillery: an arms shortage slows reinforcement.
-			bat[c] = minf(est[c], bat[c] + REINFORCE_RATE * (0.35 + 0.65 * equipment_fill(c)))
+			bat[c] = minf(est[c], bat[c] + REINFORCE_RATE * (0.35 + 0.65 * eq_f))
+		# Campaign attrition for armies deep in hostile territory with poor supply
+		if at_w[c] == 1 and eq_f < 0.5:
+			_take_casualties(c, bat[c] * 0.004 * (0.5 - eq_f))
 	if wars.is_empty():
 		return
 	for w: Dictionary in wars.duplicate():
@@ -396,9 +642,13 @@ func _targets(w: Dictionary, side: int) -> Array:
 						break
 				if src < 0:
 					continue
+				var attacker_c := controller(src)
+				var defender_c := controller(q)
 				var score := 0.0
 				if side == 1 and goals.has(q): score += 100.0
 				if mine.has(s.world.p_owner[q]): score += 60.0      # liberate our own land
+				if attacker_c >= 0 and focus_enemy[attacker_c] == defender_c:
+					score += 45.0                                   # strategic front concentration
 				if s.world.p_capital[q] == 1: score += 8.0
 				score += 10.0 - _terrain_def(q) * 4.0 - float(s.world.p_tier[q])
 				out.append([score, q, src])
@@ -452,6 +702,9 @@ func _start_battles(w: Dictionary) -> void:
 			var y := controller(q)
 			if live.has(q) or x < 0 or y < 0 or bat[x] < 0.5 or not mine.has(x):
 				continue
+			# Require contiguous supply line from source province to launch new offensive into enemy land
+			if s.world.p_owner[q] != x and not has_supply_line(x, src, mine):
+				continue
 			var pst: int = posture[x]
 			var want: bool = float(t[0]) >= 60.0 or pst == 2 or (pst == 1 and s.rng.randf() < 0.6)
 			if not want:
@@ -463,7 +716,7 @@ func _start_battles(w: Dictionary) -> void:
 
 
 ## One week of a running battle. Forces are the share of each army committed to this front, scaled by
-## equipment, supply, organisation, terrain, entrenchment and posture; the battle ends when one side's
+## equipment, supply, organisation, terrain, entrenchment, focus and posture; the battle ends when one side's
 ## organisation collapses, so a smaller well-equipped force on good ground can still win.
 func _round(q: int) -> void:
 	var b: Dictionary = live[q]
@@ -475,18 +728,17 @@ func _round(q: int) -> void:
 		return
 	var src: int = b["src"]
 	var wk: int = b["wk"]
-	var ca := maxf(0.2, bat[x] * 0.8 / maxf(1.0, _load[x]))
-	var cd := maxf(0.2, bat[y] * 0.8 / maxf(1.0, _load[y]))
+	var side: int = int(b["side"])
+	var allies_x: Array = w["attackers"] if side == 1 else w["defenders"]
+	var allies_y: Array = w["defenders"] if side == 1 else w["attackers"]
+	var foc_x := 1.20 if focus_enemy[x] == y else (0.85 if focus_enemy[x] >= 0 else 1.0)
+	var foc_y := 1.20 if focus_enemy[y] == x else (0.85 if focus_enemy[y] >= 0 else 1.0)
+	var ca := maxf(0.2, bat[x] * 0.8 * foc_x / maxf(1.0, _load[x]))
+	var cd := maxf(0.2, bat[y] * 0.8 * foc_y / maxf(1.0, _load[y]))
 	var ex := 0.4 + 0.6 * equipment_fill(x)
 	var ey := 0.4 + 0.6 * equipment_fill(y)
-	var deep: bool = s.world.p_owner[q] != x
-	if deep:
-		for n in s.world.p_neighbors[q]:
-			if s.world.p_owner[n] == x:
-				deep = false
-				break
-	var sup_a := clampf((0.88 if deep else 1.0) + 0.04 * minf(3.0, float(_railway_level(src))) - 0.012 * wk, 0.5, 1.2)
-	var sup_d := 1.0 + 0.04 * minf(3.0, float(_railway_level(q)))
+	var sup_a := supply_efficiency(x, src, q, wk, allies_x)
+	var sup_d := clampf(supply_efficiency(y, q, q, 0, allies_y) + 0.04 * minf(3.0, float(_railway_level(q))), 0.6, 1.28)
 	var terr := _terrain_def(q)
 	var fort := 1.15 if s.world.p_capital[q] == 1 else 1.0
 	var dig: float = b["dig"]
@@ -496,8 +748,8 @@ func _round(q: int) -> void:
 	var pd := cd * ey * sup_d * od * (1.0 + _tech_mod(y, "army_power")) * float(POST_DEF[posture[y]]) * terr * fort * (1.0 + dig)
 	var ratio := pa / maxf(pd, 0.01) * lerpf(0.88, 1.15, s.rng.randf())
 	var rc := clampf(ratio, 0.25, 4.0)
-	var tk_x: float = POST_TAKE[posture[x]]
-	var tk_y: float = POST_TAKE[posture[y]]
+	var tk_x: float = POST_TAKE[posture[x]] * (1.25 if sup_a < 0.75 else 1.0)
+	var tk_y: float = POST_TAKE[posture[y]] * (1.25 if sup_d < 0.75 else 1.0)
 	oa = maxf(0.0, oa - 0.16 / rc * tk_x)
 	od = maxf(0.0, od - 0.16 * rc * tk_y)
 	_take_casualties(x, ca * 0.035 / rc * tk_x)
@@ -558,8 +810,9 @@ func battle_report(c: int) -> Array:
 	for q: int in live.keys():
 		var b: Dictionary = live[q]
 		if int(b["x"]) == c or int(b["y"]) == c:
-			out.append({"province": q, "attacker": int(b["x"]), "defender": int(b["y"]), "org_a": float(b["oa"]),
-				"org_d": float(b["od"]), "weeks": int(b["wk"]), "text": explain_battle(b)})
+			out.append({"province": q, "source": int(b["src"]), "attacker": int(b["x"]), "defender": int(b["y"]),
+				"org_a": float(b["oa"]), "org_d": float(b["od"]), "weeks": int(b["wk"]), "ratio": float(b["ratio"]),
+				"text": explain_battle(b)})
 	return out
 
 
@@ -569,9 +822,10 @@ func explain_battle(b: Dictionary) -> String:
 	var y: int = b["y"]
 	var r: float = b["ratio"]
 	var head := "Attacker advancing" if r > 1.15 else ("Defenders holding" if r < 0.87 else "Deadlock")
-	return "%s. %s (%s): %.1f bn, gear %d%%, supply %d%%. %s (%s): %.1f bn, gear %d%%, supply %d%%, terrain x%.2f, entrenchment +%d%%." % [
-		head, s.world.c_short[x], POST_NAMES[posture[x]], f[0], int(float(f[2]) * 100.0), int(float(f[4]) * 100.0),
-		s.world.c_short[y], POST_NAMES[posture[y]], f[1], int(float(f[3]) * 100.0), int(float(f[5]) * 100.0), f[6], int(float(b["dig"]) * 100.0)]
+	return "%s (ratio %.2f). %s (%s): %.1f bn, gear %d%%, supply %d%%. %s (%s): %.1f bn, gear %d%%, supply %d%%, terrain %s (x%.2f), entrench +%d%%." % [
+		head, r, s.world.c_short[x], POST_NAMES[posture[x]], f[0], int(float(f[2]) * 100.0), int(float(f[4]) * 100.0),
+		s.world.c_short[y], POST_NAMES[posture[y]], f[1], int(float(f[3]) * 100.0), int(float(f[5]) * 100.0),
+		Biome.NAMES[s.world.p_terrain[int(b["src"])]] if b.has("src") else "ground", f[6], int(float(b["dig"]) * 100.0)]
 
 
 func _report(text: String, a: int, b: int, major: bool = false) -> void:

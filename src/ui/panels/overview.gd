@@ -20,25 +20,55 @@ func rebuild() -> void:
 	var pops = state.pops
 	var econ = state.econ
 	var pop: float = pops.country_pop(c)
-	_kv(g, "Population", K.num(pop))
-	_kv(g, "GDP", K.money(econ.gdp(c)), "Gross domestic product (annual value added)")
+	_kv(g, "Population", K.num(pop), "Total population: %s (Literacy %s, Unemp %s)\n%s" % [K.num(pop), K.pct(pops.literacy_of(c), 1), K.pct(pops.unemployment(c), 1), pops.sol_explanation(c)])
+	_kv(g, "GDP", K.money(econ.gdp(c)), econ.gdp_explanation(c))
 	_kv(g, "Provinces", str(world.c_provinces[c].size()))
-	_kv(g, "Legitimacy", "%d" % int(state.politics.legitimacy(c)), "Government legitimacy 0-100. Falls with debt, unrest and war exhaustion.")
+	var leg_val: float = state.politics.legitimacy(c)
+	_kv(g, "Legitimacy", "%d" % int(leg_val), "Government legitimacy: %d / 100\nInfluenced by governing interest group clout/approval, national debt, radicalism, and war exhaustion.\nAction: Enact laws supported by powerful interest groups or pay off national debt." % int(leg_val))
 	_kv(g, "Unemployment", K.pct(pops.unemployment(c), 1))
 	_kv(g, "Avg. standard of living", "%.1f" % pops.avg_sol(c), pops.sol_explanation(c))
 	_kv(g, "Literacy", K.pct(pops.literacy_of(c), 1))
 	var rad: float = pops.radical_share(c)
-	_kv(g, "Radicals", K.pct(rad, 1), "Share of the population that is radicalised. Above 35% for three months risks revolution.", K.BAD if rad > 0.25 else K.INK)
+	_kv(g, "Radicals", K.pct(rad, 1), "Radical citizens: %s\nMain factors: Standard of Living (%.1f), unemployment (%s), and high taxation.\nConsequence: Above 35%% for 3 months risks revolution.\nAction: Lower taxes, expand consumer goods (Grain, Clothes, Furniture), or create jobs." % [K.pct(rad, 1), pops.avg_sol(c), K.pct(pops.unemployment(c), 1)], K.BAD if rad > 0.25 else K.INK)
 	var army: Dictionary = state.military.army(c)
-	_kv(g, "Army", "%d bn  (power %.0f)" % [int(army.get("battalions", 0)), float(army.get("power", 0.0))])
+	_kv(g, "Army", "%d bn  (power %.0f)" % [int(army.get("battalions", 0)), float(army.get("power", 0.0))], K.breakdown_text("Army power", state.military.power_breakdown(c)))
 	_kv(g, "Wars", str(state.diplo.wars_of(c).size()))
 	add_child(g)
 
-	add_child(K.section("Budget (per week)"))
+	# Smart Alerts & Causal Diagnostics
+	var alerts: Array = econ.smart_alerts(c) if econ.has_method("smart_alerts") else []
+	if state.military != null and state.military.has_method("front_alerts"):
+		for fa in state.military.front_alerts(c):
+			alerts.append(fa)
+	if not alerts.is_empty():
+		add_child(K.section("Active Diagnostics & Alerts (%d)" % alerts.size()))
+		for i in mini(alerts.size(), 4):
+			var al: Dictionary = alerts[i]
+			var sev: String = str(al.get("severity", "warning"))
+			var col := K.BAD if sev == "critical" else (K.WARN if sev == "warning" else K.GOOD)
+			var tip_txt := "[%s] %s\nCause: %s\nAction: %s" % [sev.to_upper(), str(al.get("problem", "")), str(al.get("cause", "")), str(al.get("action", ""))]
+			var arow := K.hbox(8)
+			var albl := K.lbl("• %s: %s" % [str(al.get("label", "Alert")), str(al.get("problem", ""))], 12, col, tip_txt)
+			albl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			albl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			albl.custom_minimum_size = Vector2(360, 0)
+			arow.add_child(albl)
+			var tab_id: String = str(al.get("tab", "overview"))
+			var prov_id: int = int(al.get("province", -1))
+			if tab_id != "overview" or prov_id > 0:
+				arow.add_child(K.btn("Inspect", tip_txt, func():
+					if prov_id > 0 and hud.has_method("focus_province"):
+						hud.focus_province(prov_id)
+					if tab_id != "" and tab_id != "overview":
+						hud.open_tab(tab_id)))
+			add_child(arow)
+
+	add_child(K.section("Budget (per week) — hover for cause & effect"))
 	var b: Dictionary = econ.budget(c)
+	var b_exp: String = econ.budget_explanation(c)
 	var bg := K.grid(2, 30, 3)
 	var treasury: float = K.treasury(econ, c)
-	_kv(bg, "Treasury", K.money(treasury), "", K.BAD if treasury < 0.0 else K.INK)
+	_kv(bg, "Treasury", K.money(treasury), b_exp, K.BAD if treasury < 0.0 else K.INK)
 	if econ.can_see_investment_pool(c):
 		var p_pool: float = econ.investment_pool(c)
 		var p_net: float = econ.investment_inflow(c) - econ.investment_outflow(c)
@@ -49,24 +79,76 @@ func rebuild() -> void:
 		_kv(bg, "Private Investment Pool", "Hidden (requires Free Trade)",
 			"Enact Free Trade in the Politics tab to inspect the private sector's investment pool balance.",
 			K.DIM)
+	var item_tips := {
+		"tax": "Income and poll taxes collected from employed pops. Modified by Tax Level and Administrative Efficiency (%s)." % K.pct(econ.admin_efficiency(c)),
+		"tariffs": "Trade duties collected on market imports and exports. Modified by Trade Law.",
+		"admin": "Wages and paper inputs for Government Administration, Universities, and state institutions.",
+		"military": "Battalion wages, arms consumption, and posture upkeep (%s posture)." % state.military.POST_NAMES[state.military.get_posture(c)],
+		"construction": "Weekly spending on active state construction projects (%d active)." % mini(econ.queue(c).size(), econ._con_slots(c)),
+		"interest": "Weekly interest paid on national debt (2.5%% of negative treasury)."
+	}
 	for kv in [["Taxes", "tax", 1.0], ["Tariffs", "tariffs", 1.0], ["Administration", "admin", -1.0], ["Military upkeep", "military", -1.0],
 			["Construction", "construction", -1.0], ["Debt interest", "interest", -1.0]]:
 		var shown: float = absf(float(b.get(kv[1], 0.0))) * kv[2]
-		_kv(bg, kv[0], K.signed_money(shown), "", K.sign_color(shown))
+		_kv(bg, kv[0], K.signed_money(shown), str(item_tips.get(kv[1], b_exp)), K.sign_color(shown))
 	var bal: float = float(b.get("balance", 0.0))
-	_kv(bg, "Balance", K.signed_money(bal), "", K.sign_color(bal))
+	_kv(bg, "Balance", K.signed_money(bal), b_exp, K.sign_color(bal))
 	add_child(bg)
 	if econ.in_debt(c):
 		add_child(K.lbl("The treasury is in debt: interest accrues and legitimacy suffers.", 12, K.BAD))
 	var tr := K.hbox(6)
-	tr.add_child(K.lbl("Tax level", 13, K.INK, "Higher taxes raise revenue but hurt standard of living. Allowed levels depend on your laws."))
+	tr.add_child(K.lbl("Tax level", 13, K.INK, "Higher taxes raise revenue but hurt standard of living. Hover each button to preview predicted impact."))
 	var cur := _tax_level(c)
 	for i in 3:
-		var tb := K.btn(TAX_NAMES[i], "Set tax level to %s" % TAX_NAMES[i].to_lower(), func(): act(_set_tax(c, i), "Tax level set to %s." % TAX_NAMES[i].to_lower()))
+		var prev_tip: String = str(econ.preview_tax_change(c, i).get("summary", "Set tax level to %s" % TAX_NAMES[i].to_lower()))
+		var tb := K.btn(TAX_NAMES[i], prev_tip, func(): act(_set_tax(c, i), "Tax level set to %s." % TAX_NAMES[i].to_lower()))
 		tb.toggle_mode = true
 		tb.button_pressed = i == cur
 		tr.add_child(tb)
 	add_child(tr)
+
+	# Historical Trends (26 weeks)
+	add_child(K.section("Historical Trends (Last 26 Weeks)"))
+	var hg := K.grid(3, 14, 8)
+	var charts := [
+		["Treasury", "treasury", K.GOLD, true, false],
+		["Weekly Balance", "balance", K.GOOD if bal >= 0.0 else K.BAD, true, true],
+		["Annual GDP", "gdp", K.GOLD, true, false],
+		["Tax & Tariffs / wk", "tax", K.GOOD, true, false],
+		["Population", "pop", K.INK, false, false],
+		["Radicals %", "radicals", K.BAD if rad > 0.20 else K.WARN, false, false],
+	]
+	for ch in charts:
+		var series: PackedFloat32Array = econ.history_series(c, ch[1])
+		var cbox := K.vbox(2)
+		var first_v: float = series[0] if series.size() > 0 else 0.0
+		var last_v: float = series[series.size() - 1] if series.size() > 0 else 0.0
+		var d_v: float = last_v - first_v
+		var val_str := ""
+		var delta_str := ""
+		if ch[1] == "pop":
+			val_str = K.num(last_v)
+			delta_str = "%+d" % int(round(d_v))
+		elif ch[1] == "radicals":
+			val_str = K.pct(last_v, 1)
+			delta_str = "%+.1f%%" % (d_v * 100.0)
+		elif bool(ch[4]):
+			val_str = K.signed_money(last_v)
+			delta_str = K.signed_money(d_v)
+		else:
+			val_str = K.money(last_v)
+			delta_str = K.signed_money(d_v)
+		var ctip := "%s (%d-week history)\nStart: %s  ->  Current: %s  (Change: %s)" % [
+			ch[0], series.size(),
+			(K.num(first_v) if ch[1] == "pop" else (K.pct(first_v, 1) if ch[1] == "radicals" else K.money(first_v))),
+			val_str, delta_str
+		]
+		cbox.add_child(K.lbl("%s: %s (%s)" % [ch[0], val_str, delta_str], 11, K.INK, ctip))
+		var sp := K.spark(series, ch[2], Vector2(150, 30))
+		sp.tooltip_text = ctip
+		cbox.add_child(sp)
+		hg.add_child(cbox)
+	add_child(hg)
 
 	add_child(K.section("Research"))
 	var rid: String = state.tech.researching(c)

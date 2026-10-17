@@ -80,14 +80,20 @@ func war_rows(parent: Control) -> void:
 		head.add_child(K.spacer())
 		head.add_child(K.lbl("%s  -  %d days" % ["Attacker" if is_att else "Defender", state.day - int(w.get("start_day", 0))], 11, K.DIM, summary))
 		box.add_child(head)
+		var wid: int = int(w.get("id", 0))
 		var row := K.hbox(8)
-		row.add_child(K.lbl("Warscore %+d" % int(score), 13, K.sign_color(score),
-			"Positive means you are winning. Offers are accepted more readily when the enemy's warscore against them is poor."))
-		var b := K.bar((score + 100.0) / 200.0, K.GOOD if score >= 0.0 else K.BAD, 160.0, 10.0)
+		row.add_child(K.lbl("Warscore %+d" % int(score), 13, K.sign_color(score), summary))
+		var b := K.bar((score + 100.0) / 200.0, K.GOOD if score >= 0.0 else K.BAD, 140.0, 10.0, summary)
 		row.add_child(b)
+		if state.military != null and state.military.has_method("war_score_history"):
+			var wh: PackedFloat32Array = state.military.war_score_history(wid, player)
+			if wh.size() >= 2:
+				row.add_child(K.lbl("Trend:", 11, K.DIM, summary))
+				var wsp := K.spark(wh, K.GOOD if score >= 0.0 else K.BAD, Vector2(90, 20))
+				wsp.tooltip_text = "Warscore evolution over the last %d weeks.\n%s" % [wh.size(), summary]
+				row.add_child(wsp)
 		box.add_child(row)
 		var pr := K.hbox(6)
-		var wid: int = int(w.get("id", 0))
 		pr.add_child(K.btn("White peace", "Offer to end the war with no changes", func(): act(state.diplo.offer_peace(wid, player, "white_peace"), "Peace agreed.")))
 		pr.add_child(K.btn("Peace: cede war goals", "Offer peace on the terms of the war goals", func(): act(state.diplo.offer_peace(wid, player, "cede_goals"), "Peace agreed.")))
 		box.add_child(pr)

@@ -38,26 +38,75 @@ func rebuild() -> void:
 		pbox.add_child(K.btn(mil.POST_NAMES[i], ptips[i], func(): act(mil.set_posture(c, i), "Army posture: %s." % mil.POST_NAMES[i]), mil.get_posture(c) != i))
 	add_child(pbox)
 
-	add_child(K.section("Recruit / disband"))
+	add_child(K.section("Recruit / disband (hover for predicted impact)"))
 	var rr := K.hbox(6)
 	for n in [1, 5, 10]:
-		rr.add_child(K.btn("Recruit %d" % n, "Raise %d battalion(s). Costs money and manpower." % n, func(): act(mil.recruit(c, n), "Recruited %d battalion(s)." % n)))
+		var r_tip: String = mil.preview_recruit_impact(c, n) if mil.has_method("preview_recruit_impact") else ("Raise %d battalion(s)." % n)
+		rr.add_child(K.btn("Recruit %d" % n, r_tip, func(): act(mil.recruit(c, n), "Recruited %d battalion(s)." % n)))
 	add_child(rr)
 	var dr := K.hbox(6)
 	for n in [1, 5, 10]:
-		dr.add_child(K.btn("Disband %d" % n, "Release %d battalion(s) to save upkeep." % n, func(): act(mil.disband(c, n), "Disbanded %d battalion(s)." % n), bn > 0))
+		var d_tip: String = mil.preview_disband_impact(c, n) if mil.has_method("preview_disband_impact") else ("Release %d battalion(s)." % n)
+		dr.add_child(K.btn("Disband %d" % n, d_tip, func(): act(mil.disband(c, n), "Disbanded %d battalion(s)." % n), bn > 0))
 	add_child(dr)
 
 	add_child(K.section("Wars"))
 	war_rows(self)
-	add_child(K.section("Battles and fronts"))
+
+	add_child(K.section("Strategic Fronts & Logistics"))
+	var fronts: Array = mil.fronts_of_country(c) if mil.has_method("fronts_of_country") else []
+	if fronts.is_empty():
+		add_child(K.lbl("No active war fronts.", 12, K.DIM))
+	else:
+		for f: Dictionary in fronts:
+			var foe: int = int(f.get("enemy", -1))
+			var st_txt: String = str(f.get("status", "Holding line"))
+			var sup: float = float(f.get("supply", 1.0))
+			var is_foc: bool = bool(f.get("is_focused", false))
+			var f_exp: String = str(f.get("explanation", ""))
+			var st_col := K.GOOD if st_txt == "Advancing" else (K.BAD if st_txt == "Losing ground" else K.WARN)
+			var fhead := K.hbox(8)
+			fhead.add_child(country_chip(foe, 13))
+			fhead.add_child(K.lbl("Front vs %s  [%s]%s" % [world.c_name[foe], st_txt, "  ★ FOCUSED (+25% Power)" if is_foc else ""], 13, st_col, f_exp))
+			fhead.add_child(K.spacer())
+			var sup_col := K.GOOD if sup >= 0.80 else (K.WARN if sup >= 0.55 else K.BAD)
+			fhead.add_child(K.lbl("Supply %s" % K.pct(sup), 12, sup_col, f_exp))
+			add_child(fhead)
+
+			var fstats := K.hbox(12)
+			fstats.add_child(K.lbl("Relative Power: %.0f vs %.0f" % [float(f.get("my_power", 0.0)), float(f.get("enemy_power", 0.0))], 12, K.INK, f_exp))
+			fstats.add_child(K.lbl("Terrain Def: +%d%%" % int(round(float(f.get("terrain_def", 0.0)) * 100.0)), 12, K.DIM, f_exp))
+			fstats.add_child(K.lbl("Occupied: +%d / -%d" % [int(f.get("gained_count", 0)), int(f.get("lost_count", 0))], 12, K.INK, f_exp))
+			add_child(fstats)
+
+			var thr: Array = f.get("threatened_provinces", [])
+			if not thr.is_empty():
+				add_child(_wrapped("Threatened border provinces: " + _names(thr), K.WARN))
+			add_child(_wrapped(f_exp, K.DIM))
+
+			var fbtns := K.hbox(8)
+			var foc_btn := K.btn("Unfocus Front" if is_foc else "Focus Front (+25% Power)",
+				"Concentrate reserves and logistics on the front against %s (+25%% combat strength on this front, -15%% on secondary fronts)." % world.c_short[foe],
+				func():
+					var target_foe := -1 if is_foc else foe
+					act(mil.set_focus_enemy(c, target_foe), ("Focused offensive on %s." % world.c_short[foe]) if target_foe >= 0 else "Front focus cleared."))
+			foc_btn.toggle_mode = true
+			foc_btn.button_pressed = is_foc
+			fbtns.add_child(foc_btn)
+			fbtns.add_child(K.btn("Retreat & Regroup",
+				"Withdraw from offensive battles against %s, switch to Defensive posture, and recover +6%% morale immediately." % world.c_short[foe],
+				func(): act(mil.retreat_front(c, foe), "Forces regrouping on the %s front." % world.c_short[foe])))
+			add_child(fbtns)
+			add_child(HSeparator.new())
+
+	add_child(K.section("Active Battles"))
 	var live_b: Array = mil.battle_report(c)
 	if live_b.is_empty():
 		add_child(K.lbl("No battles are being fought.", 12, K.DIM))
 	for e: Dictionary in live_b:
 		var mine_att: bool = int(e["attacker"]) == c
 		var brow := K.hbox(8)
-		brow.add_child(K.lbl("%s %s" % [world.p_name[int(e["province"])], "(attacking)" if mine_att else "(defending)"], 13, K.GOLD))
+		brow.add_child(K.lbl("%s %s" % [world.p_name[int(e["province"])], "(attacking)" if mine_att else "(defending)"], 13, K.GOLD, str(e["text"])))
 		brow.add_child(K.spacer())
 		brow.add_child(K.bar(float(e["org_a"] if mine_att else e["org_d"]), K.GOOD, 70.0, 8.0, "Your organisation"))
 		brow.add_child(K.bar(float(e["org_d"] if mine_att else e["org_a"]), K.BAD, 70.0, 8.0, "Enemy organisation"))

@@ -89,17 +89,24 @@ func rebuild() -> void:
 					own_tag = " [State]"
 				elif plv > 0:
 					own_tag = " (%dP%s)" % [plv, (", %d %s" % [flv, world.c_short[fown]]) if (flv > 0 and fown >= 0) else ""]
-				g.add_child(K.lbl(str(b.get("name", "?")), 13))
+				var diag_tip: String = econ.building_diagnosis(p, bt_id)
+				var fin: Dictionary = econ.building_financials(p, bt_id)
+				var issues: Array = fin.get("issues", [])
+				var b_name_txt := str(b.get("name", "?"))
+				if not issues.is_empty():
+					b_name_txt += " [!]"
+				g.add_child(K.lbl(b_name_txt, 13, K.WARN if not issues.is_empty() else K.INK, diag_tip))
 				g.add_child(K.lbl("%d%s / %d%s" % [int(b.get("level", 1)), q_str, cap_lv, own_tag], 12, K.INK,
-					"Total levels / Max capacity. P = Privately owned levels (by domestic or allied capitalists)."))
+					diag_tip))
 				var need: int = int(b.get("workers_needed", 0))
 				var emp: int = int(b.get("employed", 0))
 				g.add_child(K.lbl("%s / %s" % [K.num(emp), K.num(need)], 12, K.WARN if emp < need else K.INK,
-					"Employed workers versus positions. Unfilled jobs reduce output."))
+					diag_tip))
 				var pf: float = float(b.get("profit", 0.0))
-				g.add_child(K.lbl(K.signed_money(pf), 12, K.sign_color(pf), econ.building_diagnosis(p, bt_id)))
+				g.add_child(K.lbl(K.signed_money(pf), 12, K.sign_color(pf), diag_tip))
 				var can_exp: bool = econ.can_build_fast(c, p, bt_id)
-				g.add_child(K.btn("+ Expand", "Queue another state level in %s" % world.p_name[p],
+				var exp_tip: String = str(econ.preview_build_impact(c, p, bt_id).get("summary", "Queue another state level in %s" % world.p_name[p]))
+				g.add_child(K.btn("+ Expand", exp_tip,
 					func(): act(econ.queue_build(c, p, bt_id), "%s queued in %s." % [econ.building_name(bt_id), world.p_name[p]]), can_exp))
 				var pv_chk: Dictionary = econ.can_privatize(c, p, bt_id)
 				var pv_ok: bool = bool(pv_chk.get("ok", false))
@@ -109,7 +116,7 @@ func rebuild() -> void:
 					func(): act(econ.privatize_building(c, p, bt_id), "Sold 1 level of %s to private investors." % econ.building_name(bt_id)),
 					pv_ok))
 			add_child(g)
-		add_child(K.section("Construct (sorted by expected profit)"))
+		add_child(K.section("Construct (sorted by expected profit — hover for predicted impact)"))
 		var rows: Array = []
 		for t in econ.building_count_types():
 			var res: Dictionary = econ.can_build(c, p, t)
@@ -131,27 +138,33 @@ func rebuild() -> void:
 			var t: int = r[2]
 			var reason: String = r[3]
 			var cost_val: float = econ.building_cost_at(p, t)
-			cg.add_child(K.lbl("%s (%s)" % [econ.building_name(t), K.money(cost_val)], 13, K.INK if ok else K.DIM))
+			var b_prev: Dictionary = econ.preview_build_impact(c, p, t)
+			var b_tip: String = str(b_prev.get("summary", ""))
+			cg.add_child(K.lbl("%s (%s)" % [econ.building_name(t), K.money(cost_val)], 13, K.INK if ok else K.DIM, b_tip))
 			if econ.b_state[t] == 1:
-				cg.add_child(K.lbl("State service", 12, K.DIM))
+				cg.add_child(K.lbl("State service", 12, K.DIM, b_tip))
 			else:
-				cg.add_child(K.lbl("%s/wk" % K.signed_money(est_pf), 12, K.sign_color(est_pf) if ok else K.DIM))
+				cg.add_child(K.lbl("%s/wk" % K.signed_money(est_pf), 12, K.sign_color(est_pf) if ok else K.DIM, b_tip))
 			var sh_g: int = econ.has_input_shortage(c, t)
 			var status_txt := reason
 			var status_col := K.DIM
 			if ok:
+				var warns: Array = b_prev.get("warnings", [])
 				if sh_g >= 0:
 					status_txt = "! %s shortage" % econ.good_name(sh_g)
+					status_col = K.WARN
+				elif not warns.is_empty():
+					status_txt = str(warns[0])
 					status_col = K.WARN
 				else:
 					var out_g: int = econ.b_out_g[t]
 					status_txt = ("Produces %s" % econ.good_name(out_g)) if out_g >= 0 else "Infrastructure / Admin"
-			var why := K.lbl(status_txt, 11, status_col)
+			var why := K.lbl(status_txt, 11, status_col, b_tip)
 			why.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			why.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			why.custom_minimum_size = Vector2(145, 0)
 			cg.add_child(why)
-			cg.add_child(K.btn("Build", "Queue construction in %s" % world.p_name[p] if ok else reason,
+			cg.add_child(K.btn("Build", b_tip if ok else (reason + "\n\n" + b_tip),
 				func(): act(econ.queue_build(c, p, t), "%s queued in %s." % [econ.building_name(t), world.p_name[p]]), ok))
 		add_child(cg)
 	elif is_ally_prov:

@@ -161,6 +161,31 @@ var inv_pool := PackedFloat64Array()    # c: private investment pool balance
 var inv_inflow := PackedFloat64Array()  # c: weekly private dividend reinvestment inflow
 var inv_outflow := PackedFloat64Array() # c: weekly private construction spending
 var auto_priv := PackedInt32Array()     # c: 1 if state-owned buildings are open for automatic privatization
+const HIST_LEN := 26
+var ref_tre := PackedFloat64Array()
+var ref_gdp_w := PackedFloat64Array()
+var ref_bud_tax := PackedFloat64Array()
+var ref_bud_tariff := PackedFloat64Array()
+var ref_bud_admin := PackedFloat64Array()
+var ref_bud_mil := PackedFloat64Array()
+var ref_bud_con := PackedFloat64Array()
+var ref_bud_int := PackedFloat64Array()
+var new_tre := PackedFloat64Array()
+var new_gdp_w := PackedFloat64Array()
+var new_bud_tax := PackedFloat64Array()
+var new_bud_tariff := PackedFloat64Array()
+var new_bud_admin := PackedFloat64Array()
+var new_bud_mil := PackedFloat64Array()
+var new_bud_con := PackedFloat64Array()
+var new_bud_int := PackedFloat64Array()
+var hist_len := PackedInt32Array()      # c: number of recorded history samples (0..HIST_LEN)
+var hist_tre := PackedFloat64Array()    # c*HIST_LEN
+var hist_bal := PackedFloat64Array()    # c*HIST_LEN
+var hist_gdp := PackedFloat64Array()    # c*HIST_LEN
+var hist_tax := PackedFloat64Array()    # c*HIST_LEN
+var hist_pop := PackedFloat64Array()    # c*HIST_LEN
+var hist_rad := PackedFloat64Array()    # c*HIST_LEN
+var hist_sol := PackedFloat64Array()    # c*HIST_LEN
 
 # --- province state
 var lvl := PackedInt32Array()           # p*B
@@ -211,8 +236,11 @@ const PERSIST_F64 := ["mp", "ms", "md", "fill", "sold", "src_flow", "snk_flow", 
 	"ref_demand", "ref_src", "ref_snk", "new_price", "new_supply", "new_demand", "new_src", "new_snk", "extra_demand",
 	"need_scale", "need_w", "need_fill", "tre", "gdp_w", "tax_base", "bud_tax", "bud_tariff", "bud_admin", "bud_mil",
 	"bud_con", "bud_int", "mil_arms", "trade_vol", "admin_staff", "short_lost", "short_lvl", "emp", "staff", "wpw",
-	"profit", "bout", "bio", "bscale", "tp", "rail_bonus", "dep", "vacant", "inv_pool", "inv_inflow", "inv_outflow"]
-const PERSIST_I32 := ["tax_level_local", "short_good", "lvl", "cap", "priv_lvl", "for_lvl", "for_owner", "auto_priv"]
+	"profit", "bout", "bio", "bscale", "tp", "rail_bonus", "dep", "vacant", "inv_pool", "inv_inflow", "inv_outflow",
+	"ref_tre", "ref_gdp_w", "ref_bud_tax", "ref_bud_tariff", "ref_bud_admin", "ref_bud_mil", "ref_bud_con", "ref_bud_int",
+	"new_tre", "new_gdp_w", "new_bud_tax", "new_bud_tariff", "new_bud_admin", "new_bud_mil", "new_bud_con", "new_bud_int",
+	"hist_tre", "hist_bal", "hist_gdp", "hist_tax", "hist_pop", "hist_rad", "hist_sol"]
+const PERSIST_I32 := ["tax_level_local", "short_good", "lvl", "cap", "priv_lvl", "for_lvl", "for_owner", "auto_priv", "hist_len"]
 
 
 # =========================================================================== setup
@@ -376,11 +404,19 @@ func _alloc() -> void:
 		set(a, arr)
 	for a in ["tre", "gdp_w", "tax_base", "bud_tax", "bud_tariff", "bud_admin", "bud_mil", "bud_con", "bud_int",
 			"mil_arms", "trade_vol", "admin_staff", "_m_wage", "_m_tax", "_m_tariff", "_m_trade", "_tariff_rev", "_con_money",
-			"inv_pool", "inv_inflow", "inv_outflow"]:
+			"inv_pool", "inv_inflow", "inv_outflow",
+			"ref_tre", "ref_gdp_w", "ref_bud_tax", "ref_bud_tariff", "ref_bud_admin", "ref_bud_mil", "ref_bud_con", "ref_bud_int",
+			"new_tre", "new_gdp_w", "new_bud_tax", "new_bud_tariff", "new_bud_admin", "new_bud_mil", "new_bud_con", "new_bud_int"]:
 		var arr := PackedFloat64Array()
 		arr.resize(C)
 		arr.fill(0.0)
 		set(a, arr)
+	for a in ["hist_tre", "hist_bal", "hist_gdp", "hist_tax", "hist_pop", "hist_rad", "hist_sol"]:
+		var harr := PackedFloat64Array()
+		harr.resize(C * HIST_LEN)
+		harr.fill(0.0)
+		set(a, harr)
+	hist_len.resize(C); hist_len.fill(0)
 	_m_out.resize(C * 3)
 	_m_out.fill(1.0)
 	tax_level_local.resize(C); tax_level_local.fill(1)
@@ -955,6 +991,8 @@ func warm_up(weeks: int) -> void:
 		priv_queues[c] = []
 	_snapshot_refs()
 	_snapshot_refs()
+	hist_len.fill(0)
+	_record_history(s.alive)
 	week = 0
 	s.events.clear()
 
@@ -999,6 +1037,7 @@ func tick_week() -> void:
 	_phase_settle(alive)
 	_phase_construction(alive)
 	_phase_budget(alive)
+	_record_history(alive)
 	if week % REF_PERIOD == 0:
 		_snapshot_refs()
 		_organic_growth(alive)
@@ -1664,17 +1703,73 @@ func _phase_budget(alive: PackedByteArray) -> void:
 				s.log_event(c, "economy", "Grain shortages: only %d%% of demand is met." % int(round(fill[c * G + g_grain] * 100.0)))
 
 
+func _record_history(alive: PackedByteArray) -> void:
+	for c in C:
+		if alive[c] == 0:
+			continue
+		var n := hist_len[c]
+		var base := c * HIST_LEN
+		var bal := bud_tax[c] + bud_tariff[c] - bud_admin[c] - bud_mil[c] - bud_con[c] - bud_int[c]
+		var pop_v: float = float(pops.country_pop(c)) if pops != null else 0.0
+		var rad_v: float = float(pops.radical_share(c)) if pops != null else 0.0
+		var sol_v: float = float(pops.avg_sol(c)) if pops != null else 10.0
+		if n < HIST_LEN:
+			hist_tre[base + n] = tre[c]
+			hist_bal[base + n] = bal
+			hist_gdp[base + n] = gdp_w[c] * 52.0
+			hist_tax[base + n] = bud_tax[c] + bud_tariff[c]
+			hist_pop[base + n] = pop_v
+			hist_rad[base + n] = rad_v
+			hist_sol[base + n] = sol_v
+			hist_len[c] = n + 1
+		else:
+			for k in range(1, HIST_LEN):
+				var dst := base + k - 1
+				var src := base + k
+				hist_tre[dst] = hist_tre[src]
+				hist_bal[dst] = hist_bal[src]
+				hist_gdp[dst] = hist_gdp[src]
+				hist_tax[dst] = hist_tax[src]
+				hist_pop[dst] = hist_pop[src]
+				hist_rad[dst] = hist_rad[src]
+				hist_sol[dst] = hist_sol[src]
+			var last := base + HIST_LEN - 1
+			hist_tre[last] = tre[c]
+			hist_bal[last] = bal
+			hist_gdp[last] = gdp_w[c] * 52.0
+			hist_tax[last] = bud_tax[c] + bud_tariff[c]
+			hist_pop[last] = pop_v
+			hist_rad[last] = rad_v
+			hist_sol[last] = sol_v
+
+
 func _snapshot_refs() -> void:
 	ref_price = new_price
 	ref_supply = new_supply
 	ref_demand = new_demand
 	ref_src = new_src
 	ref_snk = new_snk
+	ref_tre = new_tre
+	ref_gdp_w = new_gdp_w
+	ref_bud_tax = new_bud_tax
+	ref_bud_tariff = new_bud_tariff
+	ref_bud_admin = new_bud_admin
+	ref_bud_mil = new_bud_mil
+	ref_bud_con = new_bud_con
+	ref_bud_int = new_bud_int
 	new_price = mp.duplicate()
 	new_supply = ms.duplicate()
 	new_demand = md.duplicate()
 	new_src = src_flow.duplicate()
 	new_snk = snk_flow.duplicate()
+	new_tre = tre.duplicate()
+	new_gdp_w = gdp_w.duplicate()
+	new_bud_tax = bud_tax.duplicate()
+	new_bud_tariff = bud_tariff.duplicate()
+	new_bud_admin = bud_admin.duplicate()
+	new_bud_mil = bud_mil.duplicate()
+	new_bud_con = bud_con.duplicate()
+	new_bud_int = bud_int.duplicate()
 
 
 ## Peasants without work clear new fields (free, slow): keeps jobs roughly in step with the
@@ -2436,6 +2531,26 @@ func from_dict(d: Dictionary) -> void:
 			var cur2: PackedInt32Array = get(name)
 			if arr.size() == cur2.size():
 				set(name, arr)
+	if not d.has("ref_tre"):
+		ref_tre = tre.duplicate()
+		ref_gdp_w = gdp_w.duplicate()
+		ref_bud_tax = bud_tax.duplicate()
+		ref_bud_tariff = bud_tariff.duplicate()
+		ref_bud_admin = bud_admin.duplicate()
+		ref_bud_mil = bud_mil.duplicate()
+		ref_bud_con = bud_con.duplicate()
+		ref_bud_int = bud_int.duplicate()
+		new_tre = tre.duplicate()
+		new_gdp_w = gdp_w.duplicate()
+		new_bud_tax = bud_tax.duplicate()
+		new_bud_tariff = bud_tariff.duplicate()
+		new_bud_admin = bud_admin.duplicate()
+		new_bud_mil = bud_mil.duplicate()
+		new_bud_con = bud_con.duplicate()
+		new_bud_int = bud_int.duplicate()
+	if not d.has("hist_len"):
+		hist_len.fill(0)
+		_record_history(s.alive)
 	var qs: Array = d.get("queues", [])
 	for c in mini(qs.size(), queues.size()):
 		var pr := SimUtil.dec_i32(qs[c]["p"])
@@ -2462,7 +2577,7 @@ func from_dict(d: Dictionary) -> void:
 	_build_qpc()
 
 
-# =========================================================================== explanations (generated from live simulation values)
+# =========================================================================== explanations & history (generated from live simulation values)
 func _fmt(v: float) -> String:
 	if absf(v) >= 1.0e6:
 		return "%.1fM" % (v / 1.0e6)
@@ -2471,7 +2586,68 @@ func _fmt(v: float) -> String:
 	return "%.0f" % v
 
 
-## Why a building is not producing or earning what its size suggests.
+func _sfmt(v: float) -> String:
+	return ("+" if v >= 0.0 else "-") + _fmt(absf(v))
+
+
+## Returns up to HIST_LEN recent weekly values for country c ("treasury", "balance", "gdp", "tax", "pop", "radicals", "sol").
+func history_series(c: int, key: String) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	if c < 0 or c >= C:
+		return out
+	var n := hist_len[c]
+	if n <= 0:
+		return out
+	var src: PackedFloat64Array
+	match key:
+		"treasury": src = hist_tre
+		"balance": src = hist_bal
+		"gdp": src = hist_gdp
+		"tax": src = hist_tax
+		"pop": src = hist_pop
+		"radicals": src = hist_rad
+		"sol": src = hist_sol
+		_: return out
+	out.resize(n)
+	var base := c * HIST_LEN
+	for k in n:
+		out[k] = float(src[base + k])
+	return out
+
+
+func admin_efficiency(c: int) -> float:
+	if c < 0 or c >= C or pops == null:
+		return 1.0
+	var need: float = pops.country_pop(c) / ADMIN_POP
+	return 0.55 + 0.45 * minf(1.0, admin_staff[c] / maxf(need * b_work_total[i_admin], 1.0))
+
+
+## Exact monetary breakdown of a building's weekly revenue, input costs, wages, profit, and actionable fix.
+func building_financials(p: int, t: int) -> Dictionary:
+	var i := p * B + t
+	var L := lvl[i]
+	if L <= 0 or p <= 0 or world.p_owner[p] < 0:
+		return {"level": 0, "revenue": 0.0, "input_cost": 0.0, "wages": 0.0, "profit": 0.0, "staff_pct": 0.0, "io_pct": 0.0, "sold_pct": 1.0}
+	var c: int = world.p_owner[p]
+	var cg := c * G
+	var bsc := bscale[i]
+	var io := bio[i]
+	var go := b_out_g[t]
+	var rev := bout[i] * sold[cg + go] * mp[cg + go] if go >= 0 else 0.0
+	var cost_in := 0.0
+	var ig0 := b_in0_g[t]
+	if ig0 >= 0:
+		cost_in = bsc * io * b_in0_q[t] * mp[cg + ig0]
+		var ig1 := b_in1_g[t]
+		if ig1 >= 0:
+			cost_in += bsc * io * b_in1_q[t] * mp[cg + ig1]
+	var wages := emp[i] * wpw[i]
+	var s_pct := sold[cg + go] if go >= 0 else 1.0
+	return {"level": L, "revenue": rev, "input_cost": cost_in, "wages": wages, "profit": profit[i],
+		"staff_pct": staff[i], "io_pct": io, "sold_pct": s_pct}
+
+
+## Why a building is not producing or earning what its size suggests, with concrete financial breakdown and action.
 func building_diagnosis(p: int, t: int) -> String:
 	var i := p * B + t
 	if lvl[i] <= 0:
@@ -2480,16 +2656,31 @@ func building_diagnosis(p: int, t: int) -> String:
 	if c < 0:
 		return ""
 	var cg := c * G
+	var fin := building_financials(p, t)
+	var rev: float = float(fin["revenue"])
+	var cost_in: float = float(fin["input_cost"])
+	var wages: float = float(fin["wages"])
+	var pr: float = float(fin["profit"])
+	var head := ""
+	if b_state[t] == 1:
+		head = "State service (Lv %d): state cost -£%s/wk (wages £%s, inputs £%s)." % [lvl[i], _fmt(wages + cost_in), _fmt(wages), _fmt(cost_in)]
+	else:
+		head = "Lv %d %s: rev £%s/wk - inputs £%s - wages £%s = %s£%s/wk." % [
+			lvl[i], b_names[t], _fmt(rev), _fmt(cost_in), _fmt(wages), "+" if pr >= 0.0 else "-", _fmt(absf(pr))]
 	var parts := PackedStringArray()
+	var action := ""
 	if _ctl[p] != c:
-		parts.append("province occupied: output is only %d%%" % int(OCCUPIED_OUTPUT * 100.0))
+		parts.append("province occupied by enemy (output reduced to %d%%)" % int(OCCUPIED_OUTPUT * 100.0))
+		action = "Liberate %s in war to restore full production." % world.p_name[p]
 	if staff[i] < 0.95:
 		var lack := ""
 		for k in LABOR_PROFS:
 			if b_work[t * PC + k] > 0.0 and vacant[p * PC + k] > 0.5:
 				lack = PROF_KEYS[k]
 				break
-		parts.append("only %d%% of jobs filled%s" % [int(staff[i] * 100.0), (" (no spare %ss)" % lack) if lack != "" else ""])
+		parts.append("only %d%% of jobs filled%s" % [int(staff[i] * 100.0), (" (short of %ss)" % lack) if lack != "" else ""])
+		if action == "":
+			action = "Build universities/schools to promote %ss or expand in provinces with spare labor." % (lack if lack != "" else "workers")
 	if bio[i] < 0.95:
 		var lim := -1
 		var lf := 1.0
@@ -2498,20 +2689,32 @@ func building_diagnosis(p: int, t: int) -> String:
 				lf = fill[cg + g]
 				lim = g
 		if lim >= 0:
-			parts.append("%s shortage: inputs only %d%% supplied" % [good_names[lim].to_lower(), int(lf * 100.0)])
+			parts.append("%s shortage: inputs only %d%% supplied (price £%.1f)" % [good_names[lim].to_lower(), int(lf * 100.0), mp[cg + lim]])
+			if action == "":
+				action = "Expand %s production or sign a Trade Pact with a producer." % good_names[lim]
 	if b_state[t] == 0:
 		var go := b_out_g[t]
 		if go >= 0 and sold[cg + go] < 0.95:
-			parts.append("only %d%% of its %s is bought (oversupplied market)" % [int(sold[cg + go] * 100.0), good_names[go].to_lower()])
+			parts.append("only %d%% of its %s output is bought (oversupplied market)" % [int(sold[cg + go] * 100.0), good_names[go].to_lower()])
+			if action == "":
+				action = "Build industries that consume %s or export via Trade Pacts." % good_names[go]
 		if go >= 0 and mp[cg + go] < good_base[go] * 0.8:
-			parts.append("%s sells at %d%% of its base price" % [good_names[go].to_lower(), int(mp[cg + go] / good_base[go] * 100.0)])
+			parts.append("%s price depressed (%d%% of base)" % [good_names[go].to_lower(), int(mp[cg + go] / good_base[go] * 100.0)])
+		for g_in: int in b_in_g[t]:
+			if mp[cg + g_in] > good_base[g_in] * 1.25:
+				parts.append("expensive %s input (%d%% of base price)" % [good_names[g_in].to_lower(), int(mp[cg + g_in] / good_base[g_in] * 100.0)])
+				if action == "":
+					action = "Increase domestic %s supply to lower input costs." % good_names[g_in]
 		if b_primary[t] == 1 and tp[i] < 0.8:
-			parts.append("poor terrain yield (%d%%)" % int(tp[i] * 100.0))
-		if profit[i] < 0.0 and parts.is_empty():
+			parts.append("poor local terrain yield (%d%%)" % int(tp[i] * 100.0))
+		if pr < 0.0 and parts.is_empty():
 			parts.append("wages and input costs exceed revenue at current prices")
 	if parts.is_empty():
-		return "Running at full capacity."
-	return "Below capacity: " + "; ".join(parts) + "."
+		return head + "\nStatus: Running at full capacity."
+	var out_txt := head + "\nCause: " + "; ".join(parts) + "."
+	if action != "":
+		out_txt += "\nSuggested action: " + action
+	return out_txt
 
 
 ## Why unemployment is what it is: missing jobs, or jobs nobody can fill.
@@ -2537,23 +2740,244 @@ func jobs_explanation(c: int) -> String:
 	if rate < 0.04:
 		return "Jobs: healthy, %d%% unemployed." % int(rate * 100.0)
 	if vac > un * 0.5:
-		return "Jobs: %s jobless (%d%%) while %s positions sit vacant: the wrong professions or the wrong provinces. Build where the %ss are idle." % [_fmt(un), int(rate * 100.0), _fmt(vac), PROF_KEYS[worst]]
-	return "Jobs: %s jobless (%d%%, mostly %ss) and few vacancies: too few buildings. Invest in farms, mines or factories where they live." % [_fmt(un), int(rate * 100.0), PROF_KEYS[worst]]
+		return "Jobs: %s jobless (%d%%) while %s positions sit vacant: qualification mismatch or wrong provinces. Action: build where %ss are idle or improve literacy." % [_fmt(un), int(rate * 100.0), _fmt(vac), PROF_KEYS[worst]]
+	return "Jobs: %s jobless (%d%%, mostly %ss) and few vacancies: too few buildings. Action: expand farms, mines or factories where they live." % [_fmt(un), int(rate * 100.0), PROF_KEYS[worst]]
 
 
-## Why the treasury is gaining or losing money, ranked by the biggest spending items.
+## Why the treasury is gaining or losing money, ranked by the biggest spending items, plus 4-week causal shift.
 func budget_explanation(c: int) -> String:
 	var inc := bud_tax[c] + bud_tariff[c]
 	var bal := inc - bud_admin[c] - bud_mil[c] - bud_con[c] - bud_int[c]
-	var items := [["administration", bud_admin[c]], ["the military", bud_mil[c]], ["construction", bud_con[c]], ["debt interest", bud_int[c]]]
+	var r_inc := ref_bud_tax[c] + ref_bud_tariff[c]
+	var r_bal := r_inc - ref_bud_admin[c] - ref_bud_mil[c] - ref_bud_con[c] - ref_bud_int[c]
+	var d_bal := bal - r_bal
+	var items := [["administration & state buildings", bud_admin[c]], ["military pay & upkeep", bud_mil[c]], ["state construction", bud_con[c]], ["debt interest", bud_int[c]]]
 	items.sort_custom(func(a, b): return a[1] > b[1])
 	var txt := ""
 	if bal >= 0.0:
-		txt = "Surplus %s/wk: income %s exceeds spending; the largest cost is %s (%s)." % [_fmt(bal), _fmt(inc), items[0][0], _fmt(items[0][1])]
+		txt = "Weekly balance: +£%s/wk (surplus). Income £%s exceeds expenses; largest cost is %s (£%s/wk)." % [_fmt(bal), _fmt(inc), items[0][0], _fmt(items[0][1])]
 	else:
-		txt = "Deficit %s/wk: spending exceeds income %s, mainly %s (%s) and %s (%s)." % [_fmt(-bal), _fmt(inc), items[0][0], _fmt(items[0][1]), items[1][0], _fmt(items[1][1])]
-	if inc > 0.0 and bud_mil[c] > inc * 0.35:
-		txt += " The army takes %d%% of income." % int(bud_mil[c] / inc * 100.0)
-	if tre[c] < 0.0:
-		txt += " The state is in debt: interest accrues, legitimacy suffers and construction stalls if it deepens."
+		txt = "Weekly balance: -£%s/wk (deficit). Main factor: %s (£%s/wk) and %s (£%s/wk) exceed revenue (£%s/wk)." % [_fmt(-bal), items[0][0], _fmt(items[0][1]), items[1][0], _fmt(items[1][1]), _fmt(inc)]
+	# 4-week causal change analysis
+	var shifts := [
+		["tax revenue", bud_tax[c] - ref_bud_tax[c]],
+		["tariffs", bud_tariff[c] - ref_bud_tariff[c]],
+		["administration", -(bud_admin[c] - ref_bud_admin[c])],
+		["military spending", -(bud_mil[c] - ref_bud_mil[c])],
+		["construction spending", -(bud_con[c] - ref_bud_con[c])],
+		["debt interest", -(bud_int[c] - ref_bud_int[c])],
+	]
+	shifts.sort_custom(func(a, b): return absf(a[1]) > absf(b[1]))
+	if absf(d_bal) > 5.0 and absf(shifts[0][1]) > 3.0:
+		var dir_w := "improved" if d_bal > 0.0 else "worsened"
+		var s0_n: String = shifts[0][0]
+		var s0_v: float = shifts[0][1]
+		txt += "\n4-week trend: %s by %s£%s/wk, driven mainly by %s (%s£%s/wk)." % [
+			dir_w, "+" if d_bal >= 0.0 else "-", _fmt(absf(d_bal)), s0_n, "+" if s0_v >= 0.0 else "-", _fmt(absf(s0_v))]
+	var eff := admin_efficiency(c)
+	if eff < 0.92:
+		txt += "\nTax collection efficiency is only %d%% (short of Government Administration)." % int(round(eff * 100.0))
+	if bal < 0.0:
+		var wks_left := int(tre[c] / maxf(-bal, 1.0)) if tre[c] > 0.0 else 0
+		var conseq := ("Reserves will be exhausted in ~%d weeks." % wks_left) if tre[c] > 0.0 else "Treasury is in debt: interest accrues and legitimacy falls."
+		var act_hint := "Pause state construction, disband excess battalions, privatize state buildings, or raise taxes."
+		txt += "\nConsequence: %s\nSuggested action: %s" % [conseq, act_hint]
 	return txt
+
+
+## Explains why GDP changed over the last 4 weeks and which sectors/shortages are driving it.
+func gdp_explanation(c: int) -> String:
+	var cur := gdp(c)
+	var prev := ref_gdp_w[c] * 52.0
+	var diff := cur - prev
+	var pct_chg := (diff / maxf(prev, 1.0)) * 100.0 if prev > 0.0 else 0.0
+	var trend_str := "steady"
+	if absf(pct_chg) >= 0.5:
+		trend_str = "%s %.1f%% (%s£%s/yr) vs 4 weeks ago" % ["grew" if diff > 0.0 else "contracted", absf(pct_chg), "+" if diff >= 0.0 else "-", _fmt(absf(diff))]
+	var top_b := -1
+	var top_va := 0.0
+	var worst_b := -1
+	var worst_loss := 0.0
+	for b in B:
+		var cb := c * B + b
+		if short_lost[cb] > worst_loss:
+			worst_loss = short_lost[cb]
+			worst_b = b
+	for p: int in world.c_provinces[c]:
+		var base := p * B
+		for b in B:
+			if lvl[base + b] > 0 and profit[base + b] > top_va:
+				top_va = profit[base + b]
+				top_b = b
+	var out := "Annualized GDP: £%s (%s)." % [_fmt(cur), trend_str]
+	if top_b >= 0:
+		out += "\nLeading profitable sector: %s." % b_names[top_b]
+	if worst_b >= 0 and worst_loss > 0.3 and short_good[c * B + worst_b] >= 0:
+		var sg := short_good[c * B + worst_b]
+		out += "\nMain bottleneck: %s losing output due to %s shortage (only %d%% supplied)." % [
+			b_names[worst_b], good_names[sg], int(round(fill[c * G + sg] * 100.0))]
+		out += "\nSuggested action: Expand %s or import it via Trade Pact." % good_names[sg]
+	else:
+		out += "\nSuggested action: Expand high-margin industries or railways to boost province output."
+	return out
+
+
+## Predicts the weekly budget, SoL, and radicalism impact of setting tax level to `new_level` (0=Low, 1=Medium, 2=High).
+func preview_tax_change(c: int, new_level: int) -> Dictionary:
+	new_level = clampi(new_level, 0, 2)
+	var cur_level := tax_level(c)
+	var mults := [0.65, 1.0, 1.4]
+	var cur_m: float = mults[clampi(cur_level, 0, 2)]
+	var new_m: float = mults[new_level]
+	var cur_tax := bud_tax[c]
+	var est_tax := cur_tax * (new_m / maxf(cur_m, 0.01))
+	var d_rev := est_tax - cur_tax
+	var step := new_level - cur_level
+	var d_sol := -0.45 * float(step)
+	var d_rad_mo := 0.004 * float(step)
+	var summary := "No change (current level)." if step == 0 else (
+		"Estimated impact: %s£%s/wk tax revenue, %+.1f SoL target, %+.1f%%/mo radicalism pressure." % [
+			"+" if d_rev >= 0.0 else "-", _fmt(absf(d_rev)), d_sol, d_rad_mo * 100.0])
+	return {"delta_revenue": d_rev, "delta_sol": d_sol, "delta_rad": d_rad_mo, "summary": summary}
+
+
+## Predicts the weekly profit, jobs, construction cost, input demand, and output supply of building 1 level of `t` in `p`.
+func preview_build_impact(c: int, p: int, t: int) -> Dictionary:
+	var cost := _build_cost_at(p, t)
+	var wk_con_money := cost / BUILD_WEEKS
+	var wk_con_goods := 0.0
+	var cg := c * G
+	var bg: PackedInt32Array = b_bg_g[t]
+	var bq: PackedFloat64Array = b_bg_q[t]
+	for j in bg.size():
+		wk_con_goods += (bq[j] / BUILD_WEEKS) * mp[cg + bg[j]]
+	var wk_con_total := wk_con_money + wk_con_goods
+	var eff := tp[p * B + t] if b_primary[t] == 1 else (1.0 + rail_bonus[p])
+	var est_pf := 0.0 if b_state[t] == 1 else level_profit(c, t) * eff
+	var jobs := int(b_work_total[t])
+	var out_g := b_out_g[t]
+	var out_q := b_out_q[t] * eff if out_g >= 0 else 0.0
+	var txt := "Cost £%s (~£%s/wk for %d wks while building). Adds %d jobs." % [_fmt(cost), _fmt(wk_con_total), int(BUILD_WEEKS), jobs]
+	if b_state[t] == 1:
+		var upk := 0.0
+		for k in LABOR_PROFS:
+			upk += b_work[t * PC + k] * floor_w[k] * _m_wage[c]
+		for j in b_in_g[t].size():
+			upk += b_in_q[t][j] * mp[cg + b_in_g[t][j]]
+		txt += "\nState upkeep when finished: -£%s/wk." % _fmt(upk)
+		if t == i_railway:
+			txt += " Raises province output by up to +20% and improves front supply."
+		elif t == i_admin:
+			txt += " Raises tax collection efficiency (currently %d%%)." % int(round(admin_efficiency(c) * 100.0))
+	else:
+		txt += "\nExpected profit: %s£%s/wk." % ["+" if est_pf >= 0.0 else "-", _fmt(absf(est_pf))]
+		if out_g >= 0:
+			txt += " Produces +%.1f %s/wk." % [out_q, good_names[out_g]]
+	return {"cost": cost, "weekly_build_cost": wk_con_total, "expected_profit": est_pf, "jobs": jobs, "summary": txt}
+
+
+## Context-aware, deduplicated smart alerts sorted by severity ("critical", "warning", "opportunity").
+func smart_alerts(c: int) -> Array:
+	var alerts: Array = []
+	if c < 0 or c >= C or s.alive[c] == 0:
+		return alerts
+	var inc := bud_tax[c] + bud_tariff[c]
+	var bal := inc - bud_admin[c] - bud_mil[c] - bud_con[c] - bud_int[c]
+	# 1. Fiscal / Treasury alerts
+	if tre[c] < 0.0:
+		alerts.append({
+			"id": "debt", "severity": "critical", "tab": "overview",
+			"label": "! In Debt (-£%s)" % _fmt(-tre[c]),
+			"problem": "The national treasury is in debt (-£%s) and losing £%s/wk to interest." % [_fmt(-tre[c]), _fmt(bud_int[c])],
+			"cause": budget_explanation(c),
+			"action": "Raise taxes, pause construction, or privatize state buildings in Overview / Buildings."
+		})
+	elif bal < -maxf(inc * 0.15, 25.0):
+		var wks := int(tre[c] / maxf(-bal, 1.0))
+		if wks < 20:
+			alerts.append({
+				"id": "deficit", "severity": "critical" if wks < 8 else "warning", "tab": "overview",
+				"label": "! Deficit (-£%s/wk)" % _fmt(-bal),
+				"problem": "Persistent budget deficit (-£%s/wk); reserves last ~%d weeks." % [_fmt(-bal), wks],
+				"cause": budget_explanation(c),
+				"action": "Review military/construction spending or raise taxes in Overview."
+			})
+	# 2. Military & Frontline alerts
+	if s.military != null and s.military.at_war(c):
+		var eq: float = equipment_fill(c)
+		if eq < 0.75:
+			alerts.append({
+				"id": "arms_shortage", "severity": "critical", "tab": "military",
+				"label": "! Army Arms (%d%%)" % int(round(eq * 100.0)),
+				"problem": "Troops at war have only %d%% of required Arms." % int(round(eq * 100.0)),
+				"cause": "Military demand (%.1f/wk) exceeds Arms market supply (%.1f/wk)." % [mil_arms[c], ms[c * G + g_arms]],
+				"action": "Build Arms Factories, import Arms via Trade Pact, or switch to Defensive posture."
+			})
+		if s.military.has_method("front_alerts"):
+			for fa: Dictionary in s.military.front_alerts(c):
+				alerts.append(fa)
+	# 3. Market Input Shortages & Unproductive Buildings
+	var sh := shortage_goods(c)
+	if not sh.is_empty():
+		var g0: int = sh[0]
+		var fl0 := int(round(fill[c * G + g0] * 100.0))
+		alerts.append({
+			"id": "shortage", "severity": "critical" if fl0 < 55 else "warning", "tab": "market",
+			"label": "! Shortage: %s (%d%%)" % [good_names[g0], fl0] + ((" +%d" % (sh.size() - 1)) if sh.size() > 1 else ""),
+			"problem": "%d market good(s) in shortage (worst: %s at %d%% supply)." % [sh.size(), good_names[g0], fl0],
+			"cause": price_explanation(c, g0),
+			"action": "Construct buildings producing %s or sign a Trade Pact with a surplus nation." % good_names[g0]
+		})
+	var unprod_cnt := 0
+	var worst_p := -1
+	var worst_t := -1
+	for p: int in world.c_provinces[c]:
+		var base := p * B
+		for b in B:
+			if lvl[base + b] > 0 and b_state[b] == 0 and (profit[base + b] < -5.0 or staff[base + b] < 0.65):
+				unprod_cnt += 1
+				if worst_p < 0:
+					worst_p = p
+					worst_t = b
+	if unprod_cnt > 0 and worst_p > 0:
+		alerts.append({
+			"id": "unproductive", "severity": "warning", "tab": "buildings", "province": worst_p,
+			"label": "Unproductive Bldgs (%d)" % unprod_cnt,
+			"problem": "%d building(s) are operating at a loss or severe staffing shortage (e.g. %s in %s)." % [unprod_cnt, b_names[worst_t], world.p_name[worst_p]],
+			"cause": building_diagnosis(worst_p, worst_t),
+			"action": "Click to inspect %s and resolve input or labor bottlenecks." % world.p_name[worst_p]
+		})
+	# 4. Radicalism & Legitimacy alerts
+	if pops != null and s.politics != null:
+		var rad: float = pops.radical_share(c)
+		var leg: float = s.politics.legitimacy(c)
+		if rad > 0.22 or leg < 35.0:
+			alerts.append({
+				"id": "unrest", "severity": "critical" if (rad > 0.30 or leg < 25.0) else "warning", "tab": "politics",
+				"label": "! Unrest (%d%% Rad / %d Legit)" % [int(round(rad * 100.0)), int(leg)],
+				"problem": "Radicalism is %d%% and government legitimacy is %d." % [int(round(rad * 100.0)), int(leg)],
+				"cause": pops.sol_explanation(c),
+				"action": "Lower taxes, improve grain/clothes supply to raise SoL, or enact supported laws in Politics."
+			})
+	# 5. Research & Construction Opportunities
+	if s.tech != null and str(s.tech.researching(c)) == "":
+		alerts.append({
+			"id": "no_tech", "severity": "warning", "tab": "technology",
+			"label": "No Active Research",
+			"problem": "Research points (%.1f/wk) are going unused." % s.tech.points_per_week(c),
+			"cause": "No technology is currently selected for research.",
+			"action": "Open the Technology tab and pick a technology."
+		})
+	if queues[c].is_empty() and tre[c] > 400.0 and bal > 0.0:
+		var best := best_build_candidate(c, 0)
+		if bool(best.get("ok", false)):
+			var bp: int = int(best["province"])
+			var bt: int = int(best["type"])
+			alerts.append({
+				"id": "idle_build", "severity": "opportunity", "tab": "buildings", "province": bp,
+				"label": "+ Opportunity: %s" % b_names[bt],
+				"problem": "State construction capacity is idle while treasury has £%s (+£%s/wk)." % [_fmt(tre[c]), _fmt(bal)],
+				"cause": "%s in %s is projected to earn +£%s/wk." % [b_names[bt], world.p_name[bp], _fmt(float(best["profit"]))],
+				"action": "Open Buildings or click Auto-Invest Best to expand %s in %s." % [b_names[bt], world.p_name[bp]]
+			})
+	return alerts

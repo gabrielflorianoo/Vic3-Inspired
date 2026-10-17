@@ -14,6 +14,8 @@ var country := -1
 var mode := 0 # 0 = province, 1 = country
 var _claim_idx := 0
 var _war_confirm := -1
+var _root_box: VBoxContainer
+var _head_box: HBoxContainer
 var _body: VBoxContainer
 var _scroll: ScrollContainer
 
@@ -26,9 +28,18 @@ func setup(h: Control) -> void:
 	custom_minimum_size = Vector2(326, 0)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
+
+	_root_box = K.vbox(4)
+	add_child(_root_box)
+
+	_head_box = K.hbox(8)
+	_root_box.add_child(_head_box)
+
 	_scroll = ScrollContainer.new()
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	add_child(_scroll)
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_root_box.add_child(_scroll)
+
 	_body = K.vbox(4)
 	_body.custom_minimum_size = Vector2(300, 0)
 	_scroll.add_child(_body)
@@ -62,6 +73,7 @@ func _act(res: Variant, ok_msg: String) -> void:
 
 func refresh() -> void:
 	var sy: int = _scroll.scroll_vertical if _scroll != null else 0
+	K.clear(_head_box)
 	K.clear(_body)
 	if mode == 1:
 		_refresh_country()
@@ -76,8 +88,7 @@ func refresh() -> void:
 	var o: int = world.p_owner[p]
 	var me: int = state.player
 	var is_ally: bool = o != me and state.diplo != null and state.diplo.is_allied(me, o)
-	var head := K.hbox(8)
-	head.add_child(K.flag(world.c_color[o], Vector2(30, 22)))
+	_head_box.add_child(K.flag(world.c_color[o], Vector2(30, 22)))
 	var hv := K.vbox(0)
 	hv.add_child(K.lbl(world.p_name[p] + ("  *" if world.p_capital[p] else ""), 16, K.GOLD))
 	var ob := K.btn(world.c_name[o] + ("  (you)" if o == me else "") + "  [Right-click]",
@@ -87,10 +98,9 @@ func refresh() -> void:
 	ob.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	ob.add_theme_font_size_override("font_size", 12)
 	hv.add_child(ob)
-	head.add_child(hv)
-	head.add_child(K.spacer())
-	head.add_child(K.btn("x", "Close (click empty sea)", func(): hud.deselect_requested.emit()))
-	_body.add_child(head)
+	_head_box.add_child(hv)
+	_head_box.add_child(K.spacer())
+	_head_box.add_child(K.btn("x", "Close", func(): hud.deselect_requested.emit()))
 
 	var g := K.grid(2, 14, 2)
 	var ctrl: int = state.military.controller(p)
@@ -223,15 +233,13 @@ func _refresh_country() -> void:
 	var mil = state.military
 	var cap: int = world.c_capital[c]
 
-	var head := K.hbox(8)
-	head.add_child(K.flag(world.c_color[c], Vector2(34, 24)))
+	_head_box.add_child(K.flag(world.c_color[c], Vector2(34, 24)))
 	var hv := K.vbox(0)
 	hv.add_child(K.lbl(world.c_name[c] + ("  (you)" if c == me else ""), 16, K.GOLD))
 	hv.add_child(K.lbl("%s  -  %s" % [hud.RANKS.get(world.c_rank[c], ""), world.c_gov[c]], 11, K.DIM))
-	head.add_child(hv)
-	head.add_child(K.spacer())
-	head.add_child(K.btn("x", "Close", func(): hud.deselect_requested.emit()))
-	_body.add_child(head)
+	_head_box.add_child(hv)
+	_head_box.add_child(K.spacer())
+	_head_box.add_child(K.btn("x", "Close", func(): hud.deselect_requested.emit()))
 
 	# Country overview stats
 	var g := K.grid(2, 12, 2)
@@ -460,6 +468,15 @@ func _border_provinces(c_a: int, c_b: int) -> Array:
 
 
 func _fit() -> void:
-	var avail: float = hud.size.y - hud.PANEL_Y - 60.0
-	_scroll.custom_minimum_size.y = clampf(_body.get_combined_minimum_size().y + 2.0, 40.0, avail)
-	reset_size()
+	var win_h := get_viewport_rect().size.y if get_viewport() != null else (hud.size.y if hud != null else 720.0)
+	var max_panel_h: float = maxf(win_h - hud.PANEL_Y - 50.0, 100.0)
+	var head_h: float = _head_box.get_combined_minimum_size().y + 8.0
+	var body_h: float = _body.get_combined_minimum_size().y + 8.0
+	var avail_scroll_h: float = maxf(max_panel_h - head_h - 24.0, 40.0)
+	var target_scroll_h: float = minf(body_h, avail_scroll_h)
+	_scroll.custom_minimum_size = Vector2(306, target_scroll_h)
+	var total_h: float = head_h + target_scroll_h + 24.0
+	custom_minimum_size = Vector2(326, total_h)
+	size = Vector2(326, total_h)
+	offset_top = hud.PANEL_Y
+	offset_bottom = hud.PANEL_Y + total_h

@@ -72,6 +72,7 @@ var _last_other_toast := -100000
 var _last_refresh := 0.0
 var _hist: Array = []     # per good: PackedFloat32Array of recent prices
 var _tabs_row: HBoxContainer
+var _alerts_row: HBoxContainer
 var _top: PanelContainer
 var _top_row: HBoxContainer
 
@@ -85,6 +86,7 @@ func setup(w: RefCounted, s: RefCounted, c: Node) -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build_top_bar()
 	_build_tabs()
+	_build_alerts()
 	_build_host()
 	_province_panel = ProvincePanel.new()
 	add_child(_province_panel)
@@ -145,7 +147,14 @@ func _build_top_bar() -> void:
 	h.add_child(K.spacer())
 	h.add_child(K.btn("Menu", "Pause menu (Esc)", menu_requested.emit))
 	_top_row = h
-	resized.connect(_fit_top_bar)
+	resized.connect(_on_hud_resized)
+
+
+func _on_hud_resized() -> void:
+	_fit_top_bar()
+	_fit_host()
+	if _province_panel != null and _province_panel.visible:
+		_province_panel.refresh()
 
 
 func _build_tabs() -> void:
@@ -184,6 +193,43 @@ func _build_tabs() -> void:
 		b.add_theme_font_size_override("font_size", 11)
 		_mode_btns.append(b)
 		mrow.add_child(b)
+
+
+func _build_alerts() -> void:
+	_alerts_row = K.hbox(5)
+	_alerts_row.position = Vector2(8, PANEL_Y)
+	_alerts_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_alerts_row)
+
+
+func _refresh_alerts(c: int) -> void:
+	if _alerts_row == null or not state.econ.has_method("smart_alerts"):
+		return
+	K.clear(_alerts_row)
+	var alerts: Array = state.econ.smart_alerts(c)
+	var shown := 0
+	for a: Dictionary in alerts:
+		if shown >= 5:
+			break
+		shown += 1
+		var sev: String = str(a.get("severity", "warning"))
+		var col := K.BAD if sev == "critical" else (K.WARN if sev == "warning" else K.GOOD)
+		var bg := Color(0.24, 0.08, 0.07, 0.94) if sev == "critical" else (Color(0.20, 0.16, 0.07, 0.94) if sev == "warning" else Color(0.08, 0.18, 0.10, 0.94))
+		var tip := "[%s] %s\n\nCause: %s\n\nAction: %s" % [
+			sev.to_upper(), str(a.get("problem", "")), str(a.get("cause", "")), str(a.get("action", ""))]
+		var target_tab: String = str(a.get("tab", "overview"))
+		var target_p: int = int(a.get("province", 0))
+		var b := K.btn(str(a.get("label", "Alert")), tip, func():
+			if target_p > 0:
+				focus_province(target_p)
+			if current_tab != target_tab:
+				open_tab(target_tab)
+			else:
+				refresh_now())
+		b.add_theme_font_size_override("font_size", 11)
+		b.add_theme_color_override("font_color", col)
+		b.add_theme_stylebox_override("normal", K.style(bg, col, 1, 3, 5))
+		_alerts_row.add_child(b)
 
 
 func _build_host() -> void:
@@ -283,6 +329,8 @@ func _record_prices() -> void:
 func mouse_over_ui(pos: Vector2) -> bool:
 	if pos.y < TOP_H or _tabs_row.get_global_rect().has_point(pos):
 		return true
+	if _alerts_row != null and _alerts_row.get_child_count() > 0 and _alerts_row.get_global_rect().has_point(pos):
+		return true
 	if _host.visible and _host.get_global_rect().has_point(pos):
 		return true
 	if _province_panel.visible and _province_panel.get_global_rect().has_point(pos):
@@ -328,33 +376,41 @@ func update_bar(full: bool) -> void:
 	_tab_btns["market"].add_theme_color_override("font_color", K.BAD if sh_cnt > 0 else K.INK)
 	var q_sz: int = econ.queue_size(c)
 	_tab_btns["buildings"].text = "Buildings (%d)" % q_sz if q_sz > 0 else "Buildings"
+	var w_cnt: int = state.diplo.wars_of(c).size() if state.diplo != null else 0
+	_tab_btns["military"].text = "Military (!%d)" % w_cnt if w_cnt > 0 else "Military"
+	_tab_btns["military"].add_theme_color_override("font_color", K.BAD if w_cnt > 0 else K.INK)
 	var bud: Dictionary = econ.budget(c)
 	var bal: float = float(bud.get("balance", 0.0))
 	var tr: float = K.treasury(econ, c)
 	_bar_treasury.text = "%s (%s/wk)" % [K.money(tr), K.signed_money(bal)]
 	_bar_treasury.add_theme_color_override("font_color", K.BAD if tr < 0.0 else (K.GOOD if bal >= 0.0 else K.WARN))
-	_bar_treasury.tooltip_text = "Treasury %s\nWeekly: taxes %s, tariffs %s, admin -%s, military -%s, construction -%s, interest -%s\nBalance %s" % [
-		K.money(tr), K.num(float(bud.get("tax", 0.0))), K.num(float(bud.get("tariffs", 0.0))), K.num(absf(float(bud.get("admin", 0.0)))),
-		K.num(absf(float(bud.get("military", 0.0)))), K.num(absf(float(bud.get("construction", 0.0)))), K.num(absf(float(bud.get("interest", 0.0)))), K.signed_money(bal)]
-	_bar_treasury.tooltip_text += "\n\n" + econ.budget_explanation(c)
+	_bar_treasury.tooltip_text = "Treasury: %s  (Weekly balance: %s/wk)\nRevenues: Taxes +%s/wk, Tariffs +%s/wk\nExpenses: Admin -%s/wk, Military -%s/wk, Construction -%s/wk, Interest -%s/wk\n\n%s" % [
+		K.money(tr), K.signed_money(bal), K.money(float(bud.get("tax", 0.0))), K.money(float(bud.get("tariffs", 0.0))),
+		K.money(absf(float(bud.get("admin", 0.0)))), K.money(absf(float(bud.get("military", 0.0)))),
+		K.money(absf(float(bud.get("construction", 0.0)))), K.money(absf(float(bud.get("interest", 0.0)))),
+		econ.budget_explanation(c)]
 	_bar_pop.text = "Pop " + K.num(state.pops.country_pop(c))
-	_bar_pop.tooltip_text = "Total population\n" + econ.jobs_explanation(c)
+	_bar_pop.tooltip_text = "Total population: %s  (SoL %.1f, Literacy %s)\n%s\n\n%s" % [
+		K.num(state.pops.country_pop(c)), state.pops.avg_sol(c), K.pct(state.pops.literacy_of(c), 1),
+		econ.jobs_explanation(c), state.pops.sol_explanation(c)]
+	var gdp_tip: String = econ.gdp_explanation(c) if econ.has_method("gdp_explanation") else "Gross domestic product (annual value added)"
 	if econ.can_see_investment_pool(c):
 		var p_pool: float = econ.investment_pool(c)
 		var p_net: float = econ.investment_inflow(c) - econ.investment_outflow(c)
 		_bar_gdp.text = "GDP %s | Priv %s" % [K.money(econ.gdp(c)), K.money(p_pool)]
-		_bar_gdp.tooltip_text = "Gross domestic product (annual value added)\n\nPrivate Investment Pool (Read-only, Free Trade): %s (%s/wk)\nCapitalists and aristocrats reinvest dividends here to autonomously expand buildings, buy privatized state levels, and invest in allied countries." % [K.money(p_pool), K.signed_money(p_net)]
+		_bar_gdp.tooltip_text = "%s\n\nPrivate Investment Pool (Read-only, Free Trade): %s (%s/wk)\nCapitalists and aristocrats reinvest dividends here to autonomously expand buildings, buy privatized state levels, and invest in allied countries." % [gdp_tip, K.money(p_pool), K.signed_money(p_net)]
 	else:
 		_bar_gdp.text = "GDP " + K.money(econ.gdp(c))
-		_bar_gdp.tooltip_text = "Gross domestic product (annual value added)\n\nPrivate Investment Pool: Hidden (enact Free Trade in Politics to inspect private capital balance)."
+		_bar_gdp.tooltip_text = "%s\n\nPrivate Investment Pool: Hidden (enact Free Trade in Politics to inspect private capital balance)." % gdp_tip
 	var leg: float = state.politics.legitimacy(c)
 	_bar_leg.text = "Legit %d" % int(leg)
 	_bar_leg.add_theme_color_override("font_color", K.GOOD if leg >= 50.0 else (K.WARN if leg >= 25.0 else K.BAD))
-	_bar_leg.tooltip_text = "Government legitimacy (0-100)"
+	_bar_leg.tooltip_text = "Government legitimacy: %d / 100\nInfluenced by governing interest group clout/approval, national debt, radicalism, and war exhaustion.\nAction: Enact laws supported by powerful interest groups or pay off national debt." % int(leg)
 	var rad: float = state.pops.radical_share(c)
 	_bar_rad.text = "Rad %s" % K.pct(rad, 1)
 	_bar_rad.add_theme_color_override("font_color", K.BAD if rad > 0.25 else (K.WARN if rad > 0.12 else K.INK))
-	_bar_rad.tooltip_text = "Share of radical citizens. Above 35% for three months risks revolution."
+	_bar_rad.tooltip_text = "Radical citizens: %s\nMain factors: Standard of Living (%.1f), unemployment (%s), and high taxation.\nConsequence: Above 35%% for 3 months risks revolution.\nAction: Lower taxes, expand consumer goods (Grain, Clothes, Furniture), or create jobs." % [
+		K.pct(rad, 1), state.pops.avg_sol(c), K.pct(state.pops.unemployment(c), 1)]
 	var rid: String = state.tech.researching(c)
 	if rid == "":
 		_bar_res.text = "Research: none!"
@@ -364,6 +420,7 @@ func update_bar(full: bool) -> void:
 		_bar_res.text = "%s %d%%" % [state.tech.tech_name(rid), int(state.tech.progress(c) * 100.0)]
 		_bar_res.add_theme_color_override("font_color", K.INK)
 		_bar_res.tooltip_text = "Researching %s\n%.1f points / week" % [state.tech.tech_name(rid), state.tech.points_per_week(c)]
+	_refresh_alerts(c)
 	if size.x != _last_fit_w:
 		_fit_top_bar.call_deferred()
 
@@ -490,10 +547,13 @@ func _destroy_panel() -> void:
 func _fit_host() -> void:
 	if _panel == null:
 		return
-	var avail := size.y - PANEL_Y - 34.0 - 70.0
-	_panel_h = maxf(_panel_h, _panel.get_combined_minimum_size().y + 4.0)
-	_scroll.custom_minimum_size.y = clampf(_panel_h, 120.0, avail)
-	_host.reset_size()
+	var win_h := get_viewport_rect().size.y if get_viewport() != null else (size.y if size.y > 0.0 else 720.0)
+	var avail := maxf(win_h - PANEL_Y - 40.0, 100.0)
+	var content_h := _panel.get_combined_minimum_size().y + 4.0
+	_panel_h = clampf(content_h, 120.0, avail)
+	_scroll.custom_minimum_size = Vector2(548, _panel_h)
+	_host.custom_minimum_size = Vector2(572, 0)
+	_host.size = Vector2(572, _panel_h + 30.0)
 
 
 func open_diplomacy(country: int) -> void:
@@ -526,8 +586,7 @@ func _do_refresh_now() -> void:
 	_refresh_pending = false
 	_dirty = false
 	_last_refresh = Time.get_ticks_msec() / 1000.0
-	if _last_bar_day != state.day:
-		update_bar(true)
+	update_bar(true)
 	if _panel != null:
 		var sy: int = _scroll.scroll_vertical
 		_panel.refresh()
@@ -579,10 +638,15 @@ func show_tooltip(province: int, at: Vector2) -> void:
 		var sol: float = state.pops.province_sol(province)
 		var rad: float = state.pops.province_radical(province)
 		var gdp: float = state.econ.province_gdp(province)
-		txt += "\nPop %s  |  SoL %.1f  |  Rad %d%%  |  GDP %s" % [K.num(pop), sol, int(round(rad * 100.0)), K.money(gdp)]
+		var r_lv: int = state.econ.railway_level(province)
+		txt += "\nPop %s  |  SoL %.1f  |  Rad %d%%  |  GDP %s%s" % [
+			K.num(pop), sol, int(round(rad * 100.0)), K.money(gdp), ("  |  Rail lv %d" % r_lv) if r_lv > 0 else ""]
 		var ctl: int = state.military.controller(province)
 		if ctl != o and ctl >= 0:
-			txt += "\nOccupied by %s" % world.c_short[ctl]
+			txt += "\n! Occupied by %s (output reduced)" % world.c_short[ctl]
+		if state.military.live.has(province):
+			var bt: Dictionary = state.military.live[province]
+			txt += "\n[BATTLE] %s" % state.military.explain_battle(bt)
 	_tip_label.text = txt
 	_tooltip.visible = true
 	_tooltip.reset_size()
