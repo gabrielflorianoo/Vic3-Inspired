@@ -232,6 +232,7 @@ func _start_game(s: RefCounted) -> void:
 	hud.map_mode_requested.connect(_set_mode)
 	hud.focus_requested.connect(func(p): cam.focus(p, maxf(cam.target_zoom, 1.4)))
 	hud.select_requested.connect(_select)
+	hud.select_country_requested.connect(_select_country)
 	hud.deselect_requested.connect(_select.bind(0))
 	hud.menu_requested.connect(_toggle_pause_menu)
 	hud.perf_toggle_requested.connect(perf.cycle)
@@ -375,6 +376,17 @@ func _select(province: int) -> void:
 		overlay.queue_redraw()
 
 
+func _select_country(country: int) -> void:
+	var prev: int = map_view.selected_province
+	map_view.select_country_whole(country)
+	if hud != null:
+		hud.show_country_selection(country)
+	if pick != null:
+		pick.show_country(country)
+	if prev != 0 and overlay.lod >= overlay.LOD_REGIONAL:
+		overlay.queue_redraw()
+
+
 var _last_mouse := Vector2(-1, -1)
 
 func _is_mouse_over_ui(pos: Vector2) -> bool:
@@ -408,9 +420,13 @@ func _process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+	if event is InputEventMouseButton and not event.pressed:
 		if not _is_mouse_over_ui(event.position) and not cam.is_drag_click() and not bench.running:
-			_select(world.province_at(get_global_mouse_position()))
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				_select(world.province_at(get_global_mouse_position()))
+			elif event.button_index == MOUSE_BUTTON_RIGHT:
+				var p: int = world.province_at(get_global_mouse_position())
+				_select_country(world.p_owner[p] if p > 0 else -1)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var in_game := ctrl != null
 		var menu_open := pause_menu != null and pause_menu.visible

@@ -13,6 +13,7 @@ uniform vec2 map_size = vec2(2048.0, 1024.0);
 uniform float zoom = 1.0;
 uniform int map_mode = 0; // 0 political, 1 terrain, 2 provinces
 uniform bool country_selected = false;
+uniform bool whole_country = false;
 uniform bool has_occupation = false; // true only while some province is occupied (skips the extra fetch otherwise)
 uniform float detail = 1.0; // 0 disables ocean animation / vignette (low quality)
 
@@ -71,7 +72,7 @@ void fragment() {
 			col = terrain;
 		}
 		if (country_selected) {
-			col = meta.a > 0.5 ? col * 1.08 : mix(col, vec3(luma * 0.9), 0.35) * 0.85;
+			col = meta.a > 0.5 ? col * (whole_country ? 1.14 : 1.08) : mix(col, vec3(luma * 0.9), 0.35) * 0.85;
 		}
 		if (meta.b > 0.5) col = col * 1.12 + 0.04;
 		if (has_occupation && map_mode != 1) {
@@ -91,10 +92,14 @@ void fragment() {
 			float fade = map_mode == 2 ? 1.0 : smoothstep(0.55, 1.1, zoom);
 			col = mix(col, col * 0.62, 0.8 * fade);
 			if (c_outer) {
-				col = mix(col, own.rgb * 0.45, 0.35);
-				col = mix(col, vec3(0.10, 0.08, 0.07), 0.85);
+				if (whole_country && meta.a > 0.5) {
+					col = vec3(0.98, 0.86, 0.45);
+				} else {
+					col = mix(col, own.rgb * 0.45, 0.35);
+					col = mix(col, vec3(0.10, 0.08, 0.07), 0.85);
+				}
 			}
-			if (coast) col = mix(col, vec3(0.16, 0.20, 0.22), 0.7);
+			if (coast) col = (whole_country && meta.a > 0.5) ? mix(col, vec3(0.98, 0.86, 0.45), 0.75) : mix(col, vec3(0.16, 0.20, 0.22), 0.7);
 		}
 		if (meta.g > 0.5) {
 			col *= 1.15;

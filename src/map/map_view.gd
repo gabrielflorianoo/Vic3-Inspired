@@ -108,6 +108,7 @@ func select(province: int) -> void:
 	var old_c := selected_country
 	selected_province = province
 	selected_country = country
+	_mat.set_shader_parameter("whole_country", false)
 	if country != old_c:
 		if old_c >= 0 and old_c < world.c_provinces.size():
 			for p: int in world.c_provinces[old_c]:
@@ -122,6 +123,25 @@ func select(province: int) -> void:
 		return
 	_write_meta(old_p)
 	_write_meta(province)
+	_lookup_tex.update(_lookup_img)
+
+
+func select_country_whole(country: int) -> void:
+	var old_p := selected_province
+	var old_c := selected_country
+	selected_province = 0
+	selected_country = country
+	if old_p > 0:
+		_write_meta(old_p)
+	if country != old_c:
+		if old_c >= 0 and old_c < world.c_provinces.size():
+			for p: int in world.c_provinces[old_c]:
+				_write_meta(p)
+		if country >= 0 and country < world.c_provinces.size():
+			for p: int in world.c_provinces[country]:
+				_write_meta(p)
+	_mat.set_shader_parameter("country_selected", selected_country >= 0)
+	_mat.set_shader_parameter("whole_country", selected_country >= 0)
 	_lookup_tex.update(_lookup_img)
 
 

@@ -83,7 +83,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion and _dragging:
 		var mm := event as InputEventMouseMotion
 		_drag_moved += mm.relative.length()
-		if _drag_moved > 6.0 or mm.button_mask & (MOUSE_BUTTON_MASK_RIGHT | MOUSE_BUTTON_MASK_MIDDLE):
+		if _drag_moved > 6.0 or mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
 			position -= mm.relative / zoom.x
 			_anchored = false
 			_focus_target = Vector2.INF

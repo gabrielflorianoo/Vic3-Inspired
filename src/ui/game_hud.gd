@@ -9,6 +9,7 @@ extends Control
 signal map_mode_requested(mode: int)
 signal focus_requested(world_pos: Vector2)
 signal select_requested(province: int)
+signal select_country_requested(country: int)
 signal deselect_requested
 signal perf_toggle_requested
 signal menu_requested
@@ -43,6 +44,7 @@ var world: RefCounted
 var state: RefCounted
 var ctrl: Node
 var selected_province := 0
+var selected_country := -1
 var diplo_target := -1
 var current_tab := ""
 
@@ -541,8 +543,20 @@ func _process(_delta: float) -> void:
 
 func show_selection(province: int) -> void:
 	selected_province = province
+	selected_country = world.p_owner[province] if province > 0 else -1
 	_province_panel.show_province(province)
 	if current_tab == "buildings" and _panel != null:
+		_panel.refresh()
+		_fit_host.call_deferred()
+
+
+func show_country_selection(country: int) -> void:
+	selected_province = 0
+	selected_country = country
+	if country >= 0 and country != state.player:
+		diplo_target = country
+	_province_panel.show_country(country)
+	if (current_tab == "buildings" or current_tab == "diplomacy") and _panel != null:
 		_panel.refresh()
 		_fit_host.call_deferred()
 
@@ -552,7 +566,7 @@ func show_tooltip(province: int, at: Vector2) -> void:
 		_tooltip.visible = false
 		return
 	var o: int = world.p_owner[province]
-	var txt := "%s\n%s" % [world.p_name[province], world.c_name[o] if o >= 0 else "Unclaimed"]
+	var txt := "%s\n%s" % [world.p_name[province], (world.c_name[o] + "  (Right-click: Country & Diplomacy)") if o >= 0 else "Unclaimed"]
 	txt += "\n%s - %s%s" % [Biome.NAMES[world.p_terrain[province]], TIERS[world.p_tier[province]], " - Port" if world.p_port[province].x >= 0 else ""]
 	if o >= 0:
 		var pop: float = state.pops.province_pop(province)
