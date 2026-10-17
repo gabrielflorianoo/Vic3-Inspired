@@ -84,6 +84,10 @@ var b_work := PackedFloat64Array()      # B * PC workers per level
 var b_work_total := PackedFloat64Array()
 var b_in_g: Array = []                  # per b: PackedInt32Array
 var b_in_q: Array = []                  # per b: PackedFloat64Array
+var b_in0_g := PackedInt32Array()
+var b_in0_q := PackedFloat64Array()
+var b_in1_g := PackedInt32Array()
+var b_in1_q := PackedFloat64Array()
 var b_out_g := PackedInt32Array()
 var b_out_q := PackedFloat64Array()
 var b_bg_g: Array = []                  # build goods
@@ -272,6 +276,8 @@ func _load_defs() -> void:
 	b_work.resize(B * PC); b_work.fill(0.0)
 	b_work_total.resize(B)
 	b_out_g.resize(B); b_out_q.resize(B); b_mod.resize(B); b_state.resize(B); b_owner.resize(B)
+	b_in0_g.resize(B); b_in0_q.resize(B); b_in1_g.resize(B); b_in1_q.resize(B)
+	b_in0_g.fill(-1); b_in0_q.fill(0.0); b_in1_g.fill(-1); b_in1_q.fill(0.0)
 	b_coastal.resize(B); b_tech.resize(B); b_deposit.resize(B); b_maxlvl.resize(B); b_primary.resize(B); b_mineff.resize(B)
 	b_in_g.clear(); b_in_q.clear(); b_bg_g.clear(); b_bg_q.clear(); b_terrain.clear(); b_tprod.clear()
 	for b in B:
@@ -292,6 +298,12 @@ func _load_defs() -> void:
 			ig.append(good_index(gid))
 			iq.append(float(d["inputs"][gid]))
 		b_in_g.append(ig); b_in_q.append(iq)
+		if ig.size() > 0:
+			b_in0_g[b] = ig[0]
+			b_in0_q[b] = iq[0]
+		if ig.size() > 1:
+			b_in1_g[b] = ig[1]
+			b_in1_q[b] = iq[1]
 		b_out_g[b] = -1
 		b_out_q[b] = 0.0
 		for gid: String in d["outputs"]:
@@ -1013,7 +1025,9 @@ func _phase_production(alive: PackedByteArray) -> void:
 	var P: int = world.province_count
 	var psize: PackedFloat64Array = pops.size
 	var act := _act
-	for p in range(1, P):
+	for p in P:
+		if p == 0:
+			continue
 		var c: int = _own[p]
 		var pb := p * PC
 		if c < 0 or alive[c] == 0:
@@ -1067,23 +1081,30 @@ func _phase_production(alive: PackedByteArray) -> void:
 			vacant[pb] += w0 - h0; vacant[pb + 1] += w1 - h1; vacant[pb + 2] += w2 - h2; vacant[pb + 3] += w3 - h3
 			emp[base + b] = h0 + h1 + h2 + h3
 			staff[base + b] = st
-			# inputs
+			# inputs (flat 0..2 slots)
 			var io := 1.0
 			var lim := -1
-			var ig: PackedInt32Array = b_in_g[b]
-			var iq: PackedFloat64Array = b_in_q[b]
-			var ni := ig.size()
-			for j in ni:
-				var av := fill[cg + ig[j]]
-				if av < io:
-					io = av
-					lim = ig[j]
-			for j in ni:
-				var want := L * iq[j] * st
-				md[cg + ig[j]] += want
-				snk_flow[(cg + ig[j]) * T + b] += want
+			var bsc := L * st
+			var ig0 := b_in0_g[b]
+			if ig0 >= 0:
+				var av0 := fill[cg + ig0]
+				if av0 < io:
+					io = av0
+					lim = ig0
+				var want0 := bsc * b_in0_q[b]
+				md[cg + ig0] += want0
+				snk_flow[(cg + ig0) * T + b] += want0
+				var ig1 := b_in1_g[b]
+				if ig1 >= 0:
+					var av1 := fill[cg + ig1]
+					if av1 < io:
+						io = av1
+						lim = ig1
+					var want1 := bsc * b_in1_q[b]
+					md[cg + ig1] += want1
+					snk_flow[(cg + ig1) * T + b] += want1
 			bio[base + b] = io
-			bscale[base + b] = L * st
+			bscale[base + b] = bsc
 			var go := b_out_g[b]
 			var out := 0.0
 			if go >= 0:
@@ -1092,13 +1113,13 @@ func _phase_production(alive: PackedByteArray) -> void:
 				if mk >= 0:
 					mf = _m_out[c * 3 + mk]
 				var ioe := b_mineff[b] + (1.0 - b_mineff[b]) * io
-				out = L * b_out_q[b] * st * ioe * mf * rb * tp[base + b] * occ
+				out = bsc * b_out_q[b] * ioe * mf * rb * tp[base + b] * occ
 				ms[cg + go] += out
 				src_flow[(cg + go) * T + b] += out
 			bout[base + b] = out
-			short_lvl[cb + b] += L * st
+			short_lvl[cb + b] += bsc
 			if io < 0.999 and st > 0.0:
-				short_lost[cb + b] += L * st * (1.0 - io) * (1.0 - b_mineff[b])
+				short_lost[cb + b] += bsc * (1.0 - io) * (1.0 - b_mineff[b])
 				short_good[cb + b] = lim
 			if b == i_admin:
 				admin_staff[c] += emp[base + b]
@@ -1121,13 +1142,20 @@ func _phase_household_demand(alive: PackedByteArray) -> void:
 			var base := (c * PC + prof) * NN
 			for gi in NG:
 				var cost := 0.0
-				for j in range(grp_b[gi], grp_b[gi + 1]):
+				var j := grp_b[gi]
+				var j1 := grp_b[gi + 1]
+				while j < j1:
 					cost += qpc[base + j] * mp[cg + n_good[j]]
+					j += 1
 				_gcost[(c * PC + prof) * NG + gi] = cost
 	_hh_want.fill(0.0)
 	_cp_ns.fill(0.0)
 	var cp_ns := _cp_ns
-	for p in range(1, P):
+	var gcost := _gcost
+	var gsc := _gsc
+	for p in P:
+		if p == 0:
+			continue
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
 			continue
@@ -1142,12 +1170,12 @@ func _phase_household_demand(alive: PackedByteArray) -> void:
 			var gb := i * NG
 			var cpg := cp * NG
 			for gi in NG:
-				var cost := _gcost[cpg + gi]
+				var cost := gcost[cpg + gi]
 				var sc := 1.0
 				if cost > 0.0 and rem < cost:
 					sc = rem / cost
 				rem = maxf(rem - cost * sc, 0.0)
-				_gsc[gb + gi] = sc
+				gsc[gb + gi] = sc
 				cp_ns[cpg + gi] += N * sc
 	for c in C:
 		if alive[c] == 0:
@@ -1161,8 +1189,11 @@ func _phase_household_demand(alive: PackedByteArray) -> void:
 				var ns_tot := cp_ns[cpg + gi]
 				if ns_tot <= 0.0:
 					continue
-				for j in range(grp_b[gi], grp_b[gi + 1]):
+				var j := grp_b[gi]
+				var j1 := grp_b[gi + 1]
+				while j < j1:
 					_hh_want[hb + j] += ns_tot * qpc[qb + j]
+					j += 1
 		var cg := c * G
 		for j in NN:
 			var want := _hh_want[hb + j]
@@ -1304,7 +1335,9 @@ func _phase_settle(alive: PackedByteArray) -> void:
 	var fw0 := floor_w[0]; var fw1 := floor_w[1]; var fw2 := floor_w[2]; var fw3 := floor_w[3]
 	var p_act := _p_act
 	var p_nact := _p_nact
-	for p in range(1, P):
+	for p in P:
+		if p == 0:
+			continue
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
 			continue
@@ -1324,10 +1357,12 @@ func _phase_settle(alive: PackedByteArray) -> void:
 			if go >= 0:
 				rev = bout[base + b] * sold[cg + go] * mp[cg + go]
 			var cost_in := 0.0
-			var ig: PackedInt32Array = b_in_g[b]
-			var iq: PackedFloat64Array = b_in_q[b]
-			for j in ig.size():
-				cost_in += iq[j] * bsc * io * mp[cg + ig[j]]
+			var ig0 := b_in0_g[b]
+			if ig0 >= 0:
+				cost_in = bsc * io * b_in0_q[b] * mp[cg + ig0]
+				var ig1 := b_in1_g[b]
+				if ig1 >= 0:
+					cost_in += bsc * io * b_in1_q[b] * mp[cg + ig1]
 			var va := rev - cost_in
 			var wb := b * PC
 			var bw := bsc * wmul
@@ -1378,7 +1413,9 @@ func _phase_settle(alive: PackedByteArray) -> void:
 	for c in C:
 		tax_base[c] = 0.0
 		bud_mil[c] = 0.0
-	for p in range(1, P):
+	for p in P:
+		if p == 0:
+			continue
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
 			continue
@@ -1406,6 +1443,7 @@ func _phase_settle(alive: PackedByteArray) -> void:
 	var nf_num := _nf_num
 	var c_pop := _c_pop
 	var mf_fill := _mf_fill
+	var gsc := _gsc
 	var NG := grp_b.size() - 1
 	for c in C:
 		if alive[c] == 0:
@@ -1415,11 +1453,15 @@ func _phase_settle(alive: PackedByteArray) -> void:
 			var base_m := (c * PC + prof) * NN
 			for j in NN:
 				mf_fill[base_m + j] = n_mult[j * PC + prof] * fill[cg + n_good[j]]
-	for p in range(1, P):
+	for p in P:
+		if p == 0:
+			continue
 		var c: int = _own[p]
 		if c < 0 or alive[c] == 0:
 			continue
 		var cn := c * NN
+		var nw0 := need_w[cn]; var nw1 := need_w[cn + 1]; var nw2 := need_w[cn + 2]
+		var nw3 := need_w[cn + 3]; var nw4 := need_w[cn + 4]; var nw5 := need_w[cn + 5]
 		for prof in PC:
 			var i := p * PC + prof
 			var N := psize[i]
@@ -1429,14 +1471,46 @@ func _phase_settle(alive: PackedByteArray) -> void:
 			var sol_t := 0.0
 			var gb := i * NG
 			var base_m := (c * PC + prof) * NN
-			for gi in NG:
-				var sc := _gsc[gb + gi]
-				if sc <= 0.0:
-					continue
-				for j in range(grp_b[gi], grp_b[gi + 1]):
-					var frac := minf(1.0, mf_fill[base_m + j] * sc)
-					sol_t += need_w[cn + j] * frac
-					nf_num[cn + j] += N * frac
+			if NN == 6 and NG == 5:
+				var sc0 := gsc[gb]
+				if sc0 > 0.0:
+					var f0 := minf(1.0, mf_fill[base_m] * sc0)
+					var f1 := minf(1.0, mf_fill[base_m + 1] * sc0)
+					sol_t += nw0 * f0 + nw1 * f1
+					nf_num[cn] += N * f0
+					nf_num[cn + 1] += N * f1
+				var sc1 := gsc[gb + 1]
+				if sc1 > 0.0:
+					var f2 := minf(1.0, mf_fill[base_m + 2] * sc1)
+					sol_t += nw2 * f2
+					nf_num[cn + 2] += N * f2
+				var sc2 := gsc[gb + 2]
+				if sc2 > 0.0:
+					var f3 := minf(1.0, mf_fill[base_m + 3] * sc2)
+					sol_t += nw3 * f3
+					nf_num[cn + 3] += N * f3
+				var sc3 := gsc[gb + 3]
+				if sc3 > 0.0:
+					var f4 := minf(1.0, mf_fill[base_m + 4] * sc3)
+					sol_t += nw4 * f4
+					nf_num[cn + 4] += N * f4
+				var sc4 := gsc[gb + 4]
+				if sc4 > 0.0:
+					var f5 := minf(1.0, mf_fill[base_m + 5] * sc4)
+					sol_t += nw5 * f5
+					nf_num[cn + 5] += N * f5
+			else:
+				for gi in NG:
+					var sc := gsc[gb + gi]
+					if sc <= 0.0:
+						continue
+					var j := grp_b[gi]
+					var j1 := grp_b[gi + 1]
+					while j < j1:
+						var frac := minf(1.0, mf_fill[base_m + j] * sc)
+						sol_t += need_w[cn + j] * frac
+						nf_num[cn + j] += N * frac
+						j += 1
 			psol[i] += SOL_SMOOTH * (20.0 * sol_t - psol[i])
 	for c in C:
 		var den := c_pop[c]
